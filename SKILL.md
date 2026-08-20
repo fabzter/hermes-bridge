@@ -13,28 +13,30 @@ description: Use when talking to Hermes, driving the user's personal Hermes Agen
 
 | Subcommand | Purpose |
 |---|---|
-| `start [--fresh] [--session NAME] [--timeout N]` | Launch (or resume) Hermes in tmux |
-| `send MESSAGE` | Type one single-line message + Enter |
-| `send-file FILE` | Send file content as one message (multiline safe) |
-| `wait` | Block until idle or an action-needed state |
-| `peek [-n LINES]` | Print recent pane text, no state change |
-| `state` | Print `idle\|busy\|approval\|secret\|clarify\|dead\|missing` |
-| `session` | Print the saved underlying Hermes session id |
-| `approve` | Select "Allow once" in an approval menu |
-| `deny [REASON]` | Select "Deny"; REASON is logged to stderr only |
-| `stop` | Kill the tmux session |
+| `start --session NAME [--fresh] [--timeout N]` | Launch (or resume) Hermes in tmux |
+| `send --session NAME MESSAGE` | Type one single-line message + Enter |
+| `send-file --session NAME FILE` | Send file content as one message (multiline safe) |
+| `wait --session NAME` | Block until idle or an action-needed state |
+| `peek --session NAME [-n LINES]` | Print recent pane text, no state change |
+| `state --session NAME` | Print `idle\|busy\|approval\|secret\|clarify\|dead\|missing` |
+| `session --session NAME` | Print the saved underlying Hermes session id |
+| `approve --session NAME` | Select "Allow once" in an approval menu |
+| `deny --session NAME [REASON]` | Select "Deny"; REASON is logged to stderr only |
+| `stop --session NAME` | Kill the tmux session |
 | `log [-n N]` | Tail `~/.hermes/logs/agent.log` |
 
-`--session NAME` and `--timeout N` are accepted by every subcommand except `log` (which only takes `-n` and always tails the fixed agent.log, ignoring `--session`) — but `SESSION` resets to the default (`hermes-bridge`) on each separate invocation of the script. If you `start --session foo`, every later call (`send`, `wait`, `state`, `stop`, ...) MUST repeat `--session foo`, or it silently targets the default session instead of yours. `approve`/`deny` parse `--timeout` without erroring but ignore it — they always wait on the fixed internal default, not your value.
+**`--session NAME` is MANDATORY on every subcommand except `log`.** There is no default — omitting it is a hard error (clear message + exit 1), not a silent fallback. This is deliberate: without a required name, every concurrent Claude Code session driving this bridge on the same machine would silently collide on one shared tmux session and one shared Hermes conversation (interleaved sends, crossed replies, one session's `stop` killing another's in-flight work). Pick **one stable name per purpose** and reuse it for every call in that conversation/task — e.g. `hermes-cv` for a CV-focused thread, `hermes-main` for a general one. Name rules: letters, digits, `.`, `_`, `-` only, 1-64 chars (`^[A-Za-z0-9._-]+$`); anything else (including `/`, which would otherwise let a crafted name escape the bridge's own state directory) is rejected with a clear error. `--timeout N` is still optional everywhere it's accepted; `approve`/`deny` parse it without erroring but ignore it — they always wait on the fixed internal default, not your value.
 
 Exit codes: `0` ok, `1` generic error, `2` session missing, `3` approval, `4` secret, `5` clarify, `6` timeout, `7` dead, `8` busy (`send`/`send-file` only — refused rather than silently interrupting in-flight work). Two exceptions: `state` always exits `0` — read its printed word, not the exit code; `stop` on an already-missing session also exits `0` (nothing to stop is not an error).
 
 ## Workflow
 
-1. `start` (add `--fresh` only if the user wants a brand-new conversation, not a resume).
-2. Always check `state` before `send` — don't send into approval/secret/clarify.
-3. Loop: `send` (or `send-file` for multiline) → `wait` → act on the resulting state → repeat.
-4. `stop` at the end of the conversation, unless the user wants the session left running.
+Pick a `--session NAME` for this conversation/task first, then use it on every call below.
+
+1. `start --session NAME` (add `--fresh` only if the user wants a brand-new conversation, not a resume).
+2. Always check `state --session NAME` before `send --session NAME ...` — don't send into approval/secret/clarify.
+3. Loop: `send --session NAME MESSAGE` (or `send-file --session NAME FILE` for multiline) → `wait --session NAME` → act on the resulting state → repeat.
+4. `stop --session NAME` at the end of the conversation, unless the user wants the session left running.
 
 Multiline messages MUST go through `send-file` — `send` rejects embedded newlines by design (Hermes's live REPL submits on Enter/LF; only bracketed paste, which `send-file` uses, inserts literal newlines).
 
@@ -67,7 +69,7 @@ Safety, non-negotiable: never pass `--yolo` or `--tui` to Hermes (this script ne
 
 **Learn about the user (read-only, ground truth, no session needed):** read `~/.hermes/memories/USER.md` and `~/.hermes/memories/MEMORY.md` directly, or `~/.hermes/SOUL.md` for persona/behavior rules. Faster than asking Hermes and always current on disk.
 
-**Ask Hermes directly:** `start` → `send "..."` → `wait` → `peek`. Simplest when the answer requires Hermes's own reasoning, not just its memory files.
+**Ask Hermes directly:** `start --session NAME` → `send --session NAME "..."` → `wait --session NAME` → `peek --session NAME`. Simplest when the answer requires Hermes's own reasoning, not just its memory files.
 
 **Teach Hermes something:** `send-file` a message asking it to remember, or drive `/learn` in-session to capture a reusable skill. Memory writes may be approval-gated (`⚠`) — handle per the approval row above. Memory is a **frozen snapshot taken at session start**: a fact taught mid-session won't be reflected in that same session's behavior. To verify it landed, `stop` and `start` a fresh session (or `start --fresh` for a wholly new conversation) and probe again.
 
@@ -82,6 +84,6 @@ Safety, non-negotiable: never pass `--yolo` or `--tui` to Hermes (this script ne
 - **Crash usually surfaces as `missing`/exit 2, not `dead`/exit 7**: a resume/respawn launch runs Hermes as the pane's own direct-argv process, so a crash destroys the tmux session itself — use `log` for post-mortem diagnostics, not `peek`. Exception: the very first-ever `start` (no saved session id yet) types `hermes chat ...` into a live shell instead, so if Hermes crashes there the shell survives and you'll see `dead`/exit 7 instead; same remediation (`log`, then `start` again).
 - **A malformed saved session id self-heals, it does not error**: `start` warns on stderr and silently proceeds as a normal fresh launch — it does NOT fail. `--fresh` is for deliberately abandoning a valid saved conversation and starting a new one on purpose, not an error-recovery step.
 - **A stale-but-correctly-formatted saved session id does NOT self-heal.** Unlike a malformed one, a validly-formatted id that Hermes itself no longer recognizes (e.g. pruned from its own session store) makes `start` retry `--resume <that id>` every single time, fail to reach idle the same way every time, and exit `2` every time. If `start` keeps exiting `2` with a saved id in play, don't keep retrying plain `start` — run `start --fresh` instead.
-- **Foreign `hermes-bridge` tmux session**: every subcommand refuses to touch a session named `hermes-bridge` that this script didn't create (ownership marker). Under the lifecycle authority above you may `tmux kill-session -t hermes-bridge` yourself — peek at its content first (`tmux capture-pane -p -t hermes-bridge | tail`) to confirm it's a stale Hermes leftover and not something unrelated the user reused the name for; say what you found and did in the reply.
+- **Foreign tmux session under your chosen name**: `--session NAME` is caller-chosen (no fixed/default name), and every subcommand refuses to touch a session already running under that NAME that this script didn't create itself (ownership marker) — this matters more now than when there was one fixed name, since a name you pick (e.g. `hermes-cv`) could coincidentally already be in use for something unrelated. Under the lifecycle authority above you may `tmux kill-session -t NAME` yourself — peek at its content first (`tmux capture-pane -p -t NAME | tail`) to confirm it's a stale Hermes leftover and not something unrelated the user is using that name for; say what you found and did in the reply.
 - **Glyph detection is version-pinned to Hermes v0.20.0.** After the user runs `hermes update`, re-verify with a manual `start` + `peek` before trusting `state` again.
 - Alternative non-tmux path for one-shot exchanges that don't need live approval handling: `hermes -z "..." --resume <id>` (get `<id>` from this bridge's `session` subcommand).

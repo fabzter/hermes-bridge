@@ -14,13 +14,15 @@ Built agent-to-agent: Claude Code wrote it (spec, implementation, adversarial re
 ## Usage
 
 ```bash
-scripts/hermes-bridge start            # launch (or crash-resume) Hermes in tmux
-scripts/hermes-bridge send "hello"     # one message -> prints Hermes's reply
-scripts/hermes-bridge send-file msg.md # multiline (bracketed paste)
-scripts/hermes-bridge state            # idle|busy|approval|secret|clarify|dead|missing
-scripts/hermes-bridge approve|deny     # act on a dangerous-command menu (human-gated)
-scripts/hermes-bridge stop             # graceful /exit + kill session
+scripts/hermes-bridge start --session hermes-cv            # launch (or crash-resume) Hermes in tmux
+scripts/hermes-bridge send --session hermes-cv "hello"      # one message -> prints Hermes's reply
+scripts/hermes-bridge send-file --session hermes-cv msg.md  # multiline (bracketed paste)
+scripts/hermes-bridge state --session hermes-cv             # idle|busy|approval|secret|clarify|dead|missing
+scripts/hermes-bridge approve|deny --session hermes-cv      # act on a dangerous-command menu (human-gated)
+scripts/hermes-bridge stop --session hermes-cv              # graceful /exit + kill session
 ```
+
+`--session NAME` is mandatory on every subcommand above (letters/digits/`.`/`_`/`-`, 1-64 chars) — there's no default, so concurrent bridge users on the same machine never silently collide on one shared tmux session/Hermes conversation. Pick one stable name per purpose and reuse it for every call. `log` is the one exception (no session, tails a fixed shared log file).
 
 Distinct exit codes per state (3 approval, 4 secret, 5 clarify, 6 timeout, 8 busy…) make it scriptable; see `SKILL.md` for the full contract.
 
