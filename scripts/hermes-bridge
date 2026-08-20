@@ -3,7 +3,11 @@
 # hermes-bridge — tmux communication bridge for driving the local Hermes Agent
 # CLI (`hermes chat --cli`) interactively from Claude Code.
 #
-# Subcommands: start, send, send-file, wait, peek, state, approve, deny, stop, log
+# Subcommands: start, send, send-file, wait, peek, state, session, approve,
+# deny, stop, log
+#
+# --session NAME is REQUIRED on every subcommand except `log` (no default —
+# see the "Mandatory session name" comment above SESSION="" below for why).
 #
 # Exit codes:
 #   0  success (idle reached / command completed)
@@ -42,17 +46,18 @@ export LC_ALL=en_US.UTF-8
 # Constants / defaults
 # ---------------------------------------------------------------------------
 
-DEFAULT_SESSION="hermes-bridge"
 DEFAULT_TIMEOUT=120
 POLL_INTERVAL=0.4
 STOP_GRACE_SECONDS=5
 HERMES_LOG="$HOME/.hermes/logs/agent.log"
-PASTE_BUFFER_NAME="hermes-bridge-msg"
+# Keyed per session at use time — a fixed shared buffer name would let two
+# concurrent sessions' simultaneous pastes swap payloads (load/load/paste race).
+PASTE_BUFFER_PREFIX="hermes-bridge-msg"
 # tmux session user-option used to mark a session as one this script
-# created, so --session NAME (accepted on every subcommand, not just
-# start's documented signature — see the README-level deviation note) can
-# never respawn/kill/type into an arbitrary session the user happens to
-# already have running under that name (I11).
+# created, so --session NAME (mandatory on every subcommand below except
+# `log` — see the "mandatory session name" section) can never respawn/
+# kill/type into an arbitrary session the user happens to already have
+# running under that name (I11).
 SESSION_MARKER="@hermes_bridge_managed"
 # tmux session user-option + on-disk file used to persist the underlying
 # Hermes session id, so a crash-and-relaunch (or a plain stop/start) can
@@ -62,7 +67,16 @@ SESSION_MARKER="@hermes_bridge_managed"
 HERMES_SESSION_ID_OPTION="@hermes_bridge_session_id"
 STATE_DIR="$HOME/.claude/skills/hermes-bridge/state"
 
-SESSION="$DEFAULT_SESSION"
+# (Mandatory session name) No default. A prior version fell back to a
+# fixed "hermes-bridge" session name when --session was omitted — but that
+# means every concurrent Claude Code session on this machine would
+# silently collide on ONE shared tmux session and ONE shared Hermes
+# conversation (interleaved sends, crossed replies, one session's `stop`
+# killing another's work). --session NAME is now required on every
+# session-scoped subcommand; see parse_common_opts / require_session_name
+# below, and cmd_log (the one subcommand that intentionally stays
+# session-free, since it just tails a fixed, shared log file).
+SESSION=""
 
 # ---------------------------------------------------------------------------
 # Small utilities
@@ -72,19 +86,25 @@ err() { printf '%s\n' "$*" >&2; }
 
 usage() {
   cat <<'EOF'
-usage: hermes-bridge <command> [options]
+usage: hermes-bridge <command> --session NAME [options]
+
+--session NAME is REQUIRED on every command below except log (letters,
+digits, dot, underscore, hyphen; 1-64 chars) — pick one stable name per
+purpose (e.g. hermes-cv, hermes-main) and reuse it on every call for that
+conversation. There is no default: concurrent Claude Code sessions must
+not silently share one tmux session/Hermes conversation.
 
 commands:
-  start [--session NAME] [--timeout N] [--fresh]
-  send [--session NAME] [--timeout N] MESSAGE
-  send-file [--session NAME] [--timeout N] FILE
-  wait [--session NAME] [--timeout N]
-  peek [--session NAME] [-n LINES]
-  state [--session NAME]
-  session [--session NAME]
-  approve [--session NAME]
-  deny [--session NAME] [REASON...]
-  stop [--session NAME]
+  start --session NAME [--timeout N] [--fresh]
+  send --session NAME [--timeout N] MESSAGE
+  send-file --session NAME [--timeout N] FILE
+  wait --session NAME [--timeout N]
+  peek --session NAME [-n LINES]
+  state --session NAME
+  session --session NAME
+  approve --session NAME
+  deny --session NAME [REASON...]
+  stop --session NAME
   log [-n N]
 
 exit codes: 0 ok, 1 error, 2 session missing, 3 approval, 4 secret,
@@ -605,8 +625,8 @@ state_exit_code() {
 # removes the need for a separate literal-send-keys code path entirely.
 send_payload() {
   local content="$1"
-  printf '%s' "$content" | tmux load-buffer -b "$PASTE_BUFFER_NAME" -
-  tmux paste-buffer -p -d -b "$PASTE_BUFFER_NAME" -t "$SESSION"
+  printf '%s' "$content" | tmux load-buffer -b "$PASTE_BUFFER_PREFIX-$SESSION" -
+  tmux paste-buffer -p -d -b "$PASTE_BUFFER_PREFIX-$SESSION" -t "$SESSION"
   tmux send-keys -t "$SESSION" Enter
 }
 
@@ -952,8 +972,47 @@ extract_response() {
 # Argument parsing helpers
 # ---------------------------------------------------------------------------
 
+# (Mandatory session name) A name may only contain letters, digits, dot,
+# underscore, and hyphen, 1-64 chars. This is deliberately conservative
+# (no `/`), which as a side effect closes a prior path-traversal minor:
+# every on-disk state file is named "$STATE_DIR/$SESSION.session-id", and
+# a name that could contain `/` (e.g. "../../something") could previously
+# have escaped $STATE_DIR entirely. Pure-ASCII regex, no bash-3.2/multi-
+# byte bracket-expression concerns (see is_blank_or_separator_line's
+# comment on that class of bug) since every character in the class is
+# plain ASCII.
+is_valid_session_name() {
+  local name="$1"
+  (( ${#name} >= 1 && ${#name} <= 64 )) || return 1
+  [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]]
+}
+
+# Enforces --session NAME on every subcommand that calls parse_common_opts
+# (every one of them except `log`, which never calls this function at all —
+# it tails one fixed, shared log file and has no per-session state).
+# No default session name: falling back to one shared fixed name would
+# mean every concurrent Claude Code session on this machine silently
+# collides on ONE tmux session and ONE Hermes conversation (interleaved
+# sends, crossed replies, one session's `stop` killing another's work).
+require_session_name() {
+  if [[ -z "$SESSION" ]]; then
+    err "hermes-bridge: --session NAME is required on every subcommand except 'log'."
+    err "  Reason: without an explicit name, multiple concurrent Claude Code sessions"
+    err "  driving this bridge would silently collide on one shared tmux session and"
+    err "  one shared Hermes conversation."
+    err "  Example: hermes-bridge start --session hermes-cv"
+    exit 1
+  fi
+  if ! is_valid_session_name "$SESSION"; then
+    err "hermes-bridge: invalid --session name '$SESSION' (must match ^[A-Za-z0-9._-]+\$, 1-64 chars)"
+    exit 1
+  fi
+}
+
 # Parses --session/--timeout out of "$@", leaving remaining positional args
-# in POSITIONAL[]. Sets SESSION and TIMEOUT globals.
+# in POSITIONAL[]. Sets SESSION and TIMEOUT globals, then enforces that
+# SESSION is present and valid (require_session_name) before returning —
+# every caller of parse_common_opts gets the mandatory check for free.
 TIMEOUT="$DEFAULT_TIMEOUT"
 POSITIONAL=()
 
@@ -977,6 +1036,7 @@ parse_common_opts() {
         ;;
     esac
   done
+  require_session_name
 }
 
 # ---------------------------------------------------------------------------
