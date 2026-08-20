@@ -38,6 +38,17 @@ Exit codes: `0` ok, `1` generic error, `2` session missing, `3` approval, `4` se
 
 Multiline messages MUST go through `send-file` — `send` rejects embedded newlines by design (Hermes's live REPL submits on Enter/LF; only bracketed paste, which `send-file` uses, inserts literal newlines).
 
+## Session Lifecycle — Claude decides (standing authority from the user, 2026-08-20)
+
+Claude owns the life and death of Hermes sessions on this machine; do not ask permission for lifecycle operations — decide, act, and mention what you did in the reply:
+
+- **Bridge sessions**: start/resume/`--fresh`/stop are your calls. Default: `stop` at conversation end; leave running only when ongoing work benefits. Hermes conversations are SQLite-persisted, so `stop` loses nothing — `start` resumes the same conversation.
+- **Stale/outdated Hermes processes** (e.g. long-lived `hermes --tui`/CLI sessions still running pre-upgrade code, zombie processes, sessions wedging the Ladybug DB lock): kill them (`kill PID`, then `-9` if ignored). Their conversations remain resumable (`hermes --continue <name>` / `hermes sessions list`), so the cost is only in-flight turn state. Always say in the reply which PIDs you killed and why.
+- **Gateway**: restart with `hermes gateway restart` (the sanctioned command — never launchctl bootout/bootstrap). Restart it after venv/plugin upgrades or config changes so it runs current code. Note in the reply that Telegram goes quiet for the duration.
+- **The one lifecycle exception**: a session that is mid-approval (⚠) — resolve or surface the approval first; never kill a session as a way to dodge an approval decision.
+
+This authority covers lifecycle only. It does NOT extend to approving Hermes's dangerous-command prompts (see States table), modifying Hermes config, or sending to external platforms.
+
 ## States and Required Handling
 
 | State | Meaning | Required handling |
@@ -71,6 +82,6 @@ Safety, non-negotiable: never pass `--yolo` or `--tui` to Hermes (this script ne
 - **Crash usually surfaces as `missing`/exit 2, not `dead`/exit 7**: a resume/respawn launch runs Hermes as the pane's own direct-argv process, so a crash destroys the tmux session itself — use `log` for post-mortem diagnostics, not `peek`. Exception: the very first-ever `start` (no saved session id yet) types `hermes chat ...` into a live shell instead, so if Hermes crashes there the shell survives and you'll see `dead`/exit 7 instead; same remediation (`log`, then `start` again).
 - **A malformed saved session id self-heals, it does not error**: `start` warns on stderr and silently proceeds as a normal fresh launch — it does NOT fail. `--fresh` is for deliberately abandoning a valid saved conversation and starting a new one on purpose, not an error-recovery step.
 - **A stale-but-correctly-formatted saved session id does NOT self-heal.** Unlike a malformed one, a validly-formatted id that Hermes itself no longer recognizes (e.g. pruned from its own session store) makes `start` retry `--resume <that id>` every single time, fail to reach idle the same way every time, and exit `2` every time. If `start` keeps exiting `2` with a saved id in play, don't keep retrying plain `start` — run `start --fresh` instead.
-- **Foreign `hermes-bridge` tmux session**: every subcommand refuses to touch a session named `hermes-bridge` that this script didn't create (ownership marker). If you hit this, tell the user and have them run `tmux kill-session -t hermes-bridge` manually — don't do it yourself without asking, since it may be an unrelated session.
+- **Foreign `hermes-bridge` tmux session**: every subcommand refuses to touch a session named `hermes-bridge` that this script didn't create (ownership marker). Under the lifecycle authority above you may `tmux kill-session -t hermes-bridge` yourself — peek at its content first (`tmux capture-pane -p -t hermes-bridge | tail`) to confirm it's a stale Hermes leftover and not something unrelated the user reused the name for; say what you found and did in the reply.
 - **Glyph detection is version-pinned to Hermes v0.20.0.** After the user runs `hermes update`, re-verify with a manual `start` + `peek` before trusting `state` again.
 - Alternative non-tmux path for one-shot exchanges that don't need live approval handling: `hermes -z "..." --resume <id>` (get `<id>` from this bridge's `session` subcommand).
