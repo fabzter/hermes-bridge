@@ -40,18 +40,11 @@ Distinct exit codes per state (3 approval, 4 secret, 5 clarify, 6 timeout, 8 bus
 
 ## The other direction: Hermes → Claude Code
 
-`hermes-side/` holds the mirror bridge, which lets Hermes (Bean) hold a conversation with Claude Code:
+The mirror bridge — letting Hermes hold a continuing, read-only conversation with Claude Code —
+now lives in its own repo and installs through Hermes's own skill manager:
 
 ```bash
-claude-bridge ask "what changed in the CV?"     # continuing conversation, not one-shot
-claude-bridge ask-file long-context.md          # multiline / large context
-claude-bridge session | reset | list            # inspect or restart the conversation
+hermes skills install fabzter/hermes-claude-bridge/claude-bridge --yes
 ```
 
-It drives `claude -p` with `--session-id`/`--resume` so follow-ups keep context, and it is
-**read-only by design**: allowed tools are `Read Grep Glob WebSearch WebFetch`, so Claude can
-look things up and reason but cannot write, edit, or run shell commands on Hermes's behalf —
-anything else is denied automatically (headless has no human to approve it).
-
-Deployed location (what Hermes actually loads): `~/.hermes/skills/claude-bridge/`.
-`hermes-side/` here is the versioned copy — after changing one, copy to the other.
+See [fabzter/hermes-claude-bridge](https://github.com/fabzter/hermes-claude-bridge).
