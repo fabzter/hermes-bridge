@@ -23,9 +23,9 @@ Requires herdr ≥ 0.8.2 and python3. The bridge starts the `agents` herdr serve
 | `approve [NAME]` | Select "Allow once" in an approval menu — only after the human has said yes |
 | `deny [NAME] [REASON]` | Select "Deny"; REASON is logged to stderr only |
 | `answer [NAME] TEXT` | Answer a clarification prompt |
-| `session [NAME]` | Print the underlying Hermes session id (empty until the first turn completes) |
+| `session [NAME]` | Print the Hermes session id (exit 1 with a message until the first turn completes — send one message first) |
 | `stop [NAME]` | Send `/exit` and close the tab; conversation stays resumable; exits 0 even with nothing to stop |
-| `forget [NAME]` | Delete the stored session id for NAME (next `start` begins a brand-new conversation) |
+| `forget [NAME]` | Delete the stored record for NAME (pane, tab and session id; next `start` begins a brand-new conversation) |
 | `list` | List bridge sessions: name, pane, state, session id |
 | `gc` | Close tabs whose Hermes process has already exited |
 | `log [-n N]` | Tail `~/.hermes/logs/agent.log` (default 40 lines; no NAME — one shared log) |
@@ -40,7 +40,7 @@ NAME is the herdr agent name: `^[a-z][a-z0-9_-]{0,31}$` (lowercase start, then l
 
 ## Exit Codes
 
-`0` ok, `1` generic error, `2` missing (no tab/agent found for NAME), `3` approval, `4` secret, `5` clarify, `6` timeout, `7` dead, `8` busy (`send` only — refused rather than silently interrupting in-flight work), `9` server (herdr server unreachable). Two exceptions: `state` always exits `0` — read its printed word, not the exit code; `stop` on an already-missing session also exits `0`.
+`0` ok, `1` generic error, `2` missing (no tab/agent found for NAME), `3` approval (also the exit for the generic `blocked` state), `4` secret, `5` clarify, `6` timeout, `7` dead (also the exit for `unknown`), `8` busy (`send` only — refused rather than silently interrupting in-flight work), `9` server (herdr server unreachable). Two exceptions: `state` always exits `0` — read its printed word, not the exit code; `stop` on an already-missing session also exits `0`.
 
 ## Workflow
 
