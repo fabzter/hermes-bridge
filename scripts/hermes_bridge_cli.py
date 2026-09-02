@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import os
 import shutil
 import subprocess
@@ -69,8 +70,11 @@ def _name(args) -> str:
 
 def _text(args) -> str:
     if args.file:
-        with open(args.file, "r", encoding="utf-8") as f:
-            text = f.read()
+        try:
+            with open(args.file, "r", encoding="utf-8") as f:
+                text = f.read()
+        except OSError as e:
+            raise hb.UsageError("cannot read %s: %s" % (args.file, e))
     elif args.text == "-" or args.text is None:
         text = sys.stdin.read()
     else:
@@ -81,16 +85,20 @@ def _text(args) -> str:
 
 
 _LEGACY_POSITIONAL = {"send": "text", "deny": "reason", "answer": "text"}
+_NAMED_CMDS = {"start", "send", "state", "wait", "peek", "approve", "deny", "answer", "session", "stop", "forget"}
 
 
 def _apply_legacy_session_alias(args) -> None:
     """When `--session NAME` is used with a second positional (e.g. `send --session bean hi`),
     argparse binds the leftover positional token to `name` and leaves the real positional
-    (text/reason) empty. Shift it over so `--session` behaves as a NAME alias, not a name-eating flag."""
+    (text/reason) empty or at its default. Shift it over so `--session` behaves as a NAME
+    alias, not a name-eating flag. `deny`'s `reason` defaults to "" (not None) when omitted,
+    so an unset positional is either None or the empty string."""
     pos_attr = _LEGACY_POSITIONAL.get(args.cmd)
     if not pos_attr:
         return
-    if getattr(args, "session_alias", None) and getattr(args, pos_attr, None) is None and getattr(args, "name", None):
+    if (getattr(args, "session_alias", None) and getattr(args, pos_attr, None) in (None, "")
+            and getattr(args, "name", None)):
         setattr(args, pos_attr, args.name)
         args.name = None
 
@@ -106,7 +114,13 @@ def main(argv=None, bridge_factory=None, stdout=None, stderr=None) -> int:
         if args.cmd == "log":
             cp = subprocess.run(["tail", "-n", str(args.lines), HERMES_LOG], capture_output=True, text=True)
             out.write(cp.stdout)
-            return 0 if cp.returncode == 0 else 1
+            return 0 if cp.returncode == 0 else hb.EXIT_ERROR
+        # Validate NAME (and apply the legacy --session shift) before touching herdr at all,
+        # so a bad invocation exits 2 even when the server/bridge would be unavailable.
+        name = None
+        if args.cmd in _NAMED_CMDS:
+            _apply_legacy_session_alias(args)
+            name = _name(args)
         b = (bridge_factory or default_bridge_factory)()
         b.h.ensure_server()
         if args.cmd == "list":
@@ -117,10 +131,8 @@ def main(argv=None, bridge_factory=None, stdout=None, stderr=None) -> int:
             for t in b.gc():
                 out.write("closed %s\n" % t)
             return 0
-        _apply_legacy_session_alias(args)
-        name = _name(args)
         if args.cmd == "start":
-            b.cfg.start_timeout_ms = args.timeout * 1000
+            b.cfg = dataclasses.replace(b.cfg, start_timeout_ms=args.timeout * 1000)
             a = b.start(name, HERMES_LAUNCH, fresh=args.fresh)
             st = b.state(name)[0]
             out.write("%s %s %s\n" % (name, a.get("pane_id"), st))
@@ -162,7 +174,7 @@ def main(argv=None, bridge_factory=None, stdout=None, stderr=None) -> int:
             sid = ((a or {}).get("agent_session") or {}).get("value") or b.store.load(name).get("agent_session_id")
             if not sid:
                 err.write("hermes-bridge: no session id known for %r yet (send one message first)\n" % name)
-                return 1
+                return hb.EXIT_ERROR
             out.write(sid + "\n")
             return 0
         if args.cmd == "stop":
