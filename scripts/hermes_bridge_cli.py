@@ -103,16 +103,19 @@ def _apply_legacy_session_alias(args) -> None:
     """When `--session NAME` is used with a second positional (e.g. `send --session bean hi`),
     argparse binds the leftover positional token to `name` and leaves the real positional
     (text/reason) empty or at its default. Shift it over so `--session` behaves as a NAME
-    alias, not a name-eating flag. `deny`'s `reason` defaults to "" (not None) when omitted,
-    so an unset positional is either None or the empty string."""
-    pos_attr = _LEGACY_POSITIONAL.get(args.cmd)
-    if not pos_attr:
+    alias, not a name-eating flag, for the commands that have a second positional to shift
+    into. Commands without one (start, state, wait, peek, approve, session, stop, forget)
+    have nowhere to shift a stray positional to, so `--session X Y` there is just NAME given
+    twice and must be refused rather than letting the positional silently win.
+    `deny`'s `reason` defaults to "" (not None) when omitted, so an unset positional is
+    either None or the empty string."""
+    if not (getattr(args, "session_alias", None) and getattr(args, "name", None)):
         return
-    if getattr(args, "session_alias", None) and getattr(args, "name", None):
-        if getattr(args, pos_attr, None) not in (None, ""):
-            raise hb.UsageError("--session and a NAME positional cannot both be given")
-        setattr(args, pos_attr, args.name)
-        args.name = None
+    pos_attr = _LEGACY_POSITIONAL.get(args.cmd)
+    if pos_attr is None or getattr(args, pos_attr, None) not in (None, ""):
+        raise hb.UsageError("--session and a NAME positional cannot both be given")
+    setattr(args, pos_attr, args.name)
+    args.name = None
 
 
 def main(argv=None, bridge_factory=None, stdout=None, stderr=None) -> int:

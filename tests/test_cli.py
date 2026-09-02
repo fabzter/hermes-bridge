@@ -250,6 +250,21 @@ class CliTests(unittest.TestCase):
         rc, out, _ = run(["send", "--session", "bean", "hi"], h)
         self.assertEqual((rc, out.strip()), (0, "hello back"))
 
+    # -- fix round 1: --session + NAME positional is refused even for commands with no ------
+    # -- second positional to shift into (start/state/wait/peek/approve/session/stop/forget) -
+
+    def test_legacy_session_alias_collides_on_command_without_second_positional(self):
+        h = FakeHerdr()
+        rc, _, err = run(["state", "--session", "bean", "bean2"], h)
+        self.assertEqual(rc, 2)
+        self.assertIn("cannot both be given", err)
+        self.assertEqual(h.calls, [])
+
+    def test_legacy_session_alias_collides_on_stop(self):
+        rc, _, err = run(["stop", "--session", "bean", "bean"], FakeHerdr())
+        self.assertEqual(rc, 2)
+        self.assertIn("cannot both be given", err)
+
     # -- task 1: `start --yolo` explicit opt-in and flag persistence -----------------------
 
     def test_build_hermes_launch_default_and_yolo(self):

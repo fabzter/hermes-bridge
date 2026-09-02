@@ -95,7 +95,10 @@ See [fabzter/hermes-claude-bridge](https://github.com/fabzter/hermes-claude-brid
 
 ## Upgrading
 
-NAME must match `^[a-z][a-z0-9_-]{0,31}$`; per-session state lives at `state/<name>.json`, with any pre-existing `<name>.session-id` file picked up and migrated automatically the first time that name is used (renamed to `<name>.session-id.migrated` once done); `send NAME -f FILE` (or `send NAME -` for stdin) replaces the old `send-file` subcommand.
+- NAME must match `^[a-z][a-z0-9_-]{0,31}$`.
+- Per-session state lives at `state/<name>.json`.
+- Any pre-existing `<name>.session-id` file is picked up and migrated automatically the first time that name is used, and renamed to `<name>.session-id.migrated` once done.
+- `send NAME -f FILE` (or `send NAME -` for stdin) replaces the old `send-file` subcommand.
 
 ## Caveats
 

@@ -30,7 +30,7 @@ Requires herdr ≥ 0.8.2 and python3. The bridge starts the `agents` herdr serve
 | `gc` | Close tabs whose Hermes process has already exited |
 | `log [-n N]` | Tail `~/.hermes/logs/agent.log` (default 40 lines; no NAME — one shared log) |
 
-For multiline text use `send NAME -f FILE` or pipe stdin with `send NAME -` — multiline is now just an argument to `send`, not a separate subcommand. `--session NAME` still works everywhere as a deprecated alias for the positional NAME.
+For multiline text use `send NAME -f FILE` or pipe stdin with `send NAME -` — multiline is now just an argument to `send`, not a separate subcommand.
 
 ## Argument order
 
