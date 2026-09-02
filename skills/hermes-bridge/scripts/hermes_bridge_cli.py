@@ -11,7 +11,11 @@ import sys
 import herdrbridge as hb
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-STATE_DIR = os.path.join(SKILL_DIR, "state")
+# Session state must outlive plugin updates: Claude Code replaces the plugin's
+# cache directory on every update, so the store lives under the user's state
+# directory unless HERMES_BRIDGE_STATE_DIR points elsewhere.
+STATE_DIR = os.environ.get("HERMES_BRIDGE_STATE_DIR") or os.path.join(
+    os.path.expanduser("~"), ".local", "state", "hermes-bridge")
 HERMES_LAUNCH = ["chat", "--cli", "--source", "tool"]
 HERMES_CFG = hb.BridgeConfig(workspace_label="hermes-bridge", kind="hermes",
                              default_cwd=os.path.expanduser("~"))
