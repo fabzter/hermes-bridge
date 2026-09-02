@@ -250,6 +250,74 @@ class CliTests(unittest.TestCase):
         rc, out, _ = run(["send", "--session", "bean", "hi"], h)
         self.assertEqual((rc, out.strip()), (0, "hello back"))
 
+    # -- task 1: `start --yolo` explicit opt-in and flag persistence -----------------------
+
+    def test_build_hermes_launch_default_and_yolo(self):
+        self.assertEqual(cli.build_hermes_launch(False), cli.HERMES_LAUNCH)
+        self.assertEqual(cli.build_hermes_launch(True), cli.HERMES_LAUNCH + ["--yolo"])
+        # must not alias/mutate the shared constant
+        self.assertIsNot(cli.build_hermes_launch(False), cli.HERMES_LAUNCH)
+
+    def test_start_yolo_appends_flag_and_persists_launch_flags(self):
+        store = hb.StateStore(tempfile.mkdtemp())
+        h = FakeHerdr(dict(self._START_FAKE_CALLS))
+        rc, _, _ = run(["start", "bean", "--yolo"], h, store)
+        self.assertEqual(rc, 0)
+        start = [c for c in h.calls if c[:3] == ("cli", "agent", "start")][0]
+        self.assertEqual(start[start.index("--") + 1:], ("chat", "--cli", "--source", "tool", "--yolo"))
+        self.assertEqual(store.load("bean").get("launch_flags"), ["--yolo"])
+
+    def test_start_plain_persists_empty_launch_flags(self):
+        store = hb.StateStore(tempfile.mkdtemp())
+        h = FakeHerdr(dict(self._START_FAKE_CALLS))
+        rc, _, _ = run(["start", "bean"], h, store)
+        self.assertEqual(rc, 0)
+        start = [c for c in h.calls if c[:3] == ("cli", "agent", "start")][0]
+        self.assertEqual(start[start.index("--") + 1:], ("chat", "--cli", "--source", "tool"))
+        self.assertEqual(store.load("bean").get("launch_flags"), [])
+
+    def test_send_on_yolo_session_writes_stderr_note(self):
+        after = "● hi\n╭─ ⚕ Hermes  10:00─╮\nhello back\n╰──╯\n❯\n"
+        store = hb.StateStore(tempfile.mkdtemp())
+        store.save("bean", launch_flags=["--yolo"])
+        h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
+                       "agent list": [ok("agent_list", agents=[agent("bean")])],
+                       "agent prompt": [ok("agent_prompt", agent=agent("bean"))]},
+                      {"agent read": ["", after]})
+        rc, out, err = run(["send", "bean", "hi"], h, store)
+        self.assertEqual((rc, out.strip()), (0, "hello back"))
+        self.assertIn("hermes-bridge: this session runs with --yolo (no approval prompts)", err)
+
+    def test_send_on_plain_session_has_no_yolo_note(self):
+        after = "● hi\n╭─ ⚕ Hermes  10:00─╮\nhello back\n╰──╯\n❯\n"
+        h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
+                       "agent list": [ok("agent_list", agents=[agent("bean")])],
+                       "agent prompt": [ok("agent_prompt", agent=agent("bean"))]},
+                      {"agent read": ["", after]})
+        rc, out, err = run(["send", "bean", "hi"], h)
+        self.assertEqual(rc, 0)
+        self.assertNotIn("--yolo", err)
+
+    def test_list_shows_yolo_flag_column(self):
+        store = hb.StateStore(tempfile.mkdtemp())
+        store.save("bean", launch_flags=["--yolo"])
+        h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
+                       "tab list": [ok("tab_list", tabs=[{"tab_id": "w1:t1", "label": "bean"}])],
+                       "agent list": [ok("agent_list", agents=[agent("bean", session="S1")])]})
+        rc, out, _ = run(["list"], h, store)
+        self.assertEqual(rc, 0)
+        line = [l for l in out.splitlines() if "bean" in l][0]
+        self.assertTrue(line.rstrip().endswith("--yolo"))
+
+    def test_list_shows_dash_when_no_yolo_flag(self):
+        h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
+                       "tab list": [ok("tab_list", tabs=[{"tab_id": "w1:t1", "label": "bean"}])],
+                       "agent list": [ok("agent_list", agents=[agent("bean", session="S1")])]})
+        rc, out, _ = run(["list"], h)
+        line = [l for l in out.splitlines() if "bean" in l][0]
+        self.assertTrue(line.rstrip().endswith("-"))
+        self.assertNotIn("--yolo", line)
+
 
 if __name__ == "__main__":
     unittest.main()

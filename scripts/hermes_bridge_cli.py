@@ -18,6 +18,12 @@ HERMES_CFG = hb.BridgeConfig(workspace_label="hermes-bridge", kind="hermes",
 HERMES_LOG = os.path.expanduser("~/.hermes/logs/agent.log")
 
 
+def build_hermes_launch(yolo: bool) -> list:
+    """The `agent start ... -- ...` launch argv, with `--yolo` appended only when explicitly
+    requested. Never mutates HERMES_LAUNCH itself."""
+    return HERMES_LAUNCH + (["--yolo"] if yolo else [])
+
+
 def default_bridge_factory():
     herdr_bin = os.environ.get("HERDR_BIN") or shutil.which("herdr") or "/opt/homebrew/bin/herdr"
     h = hb.Herdr(hb.session_name(), bin=herdr_bin)
@@ -37,6 +43,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp = named("start", "launch or resume Hermes in herdr session 'agents'")
     sp.add_argument("--fresh", action="store_true", help="abandon the stored conversation; start a new one")
     sp.add_argument("--timeout", type=int, default=120, help="startup timeout seconds")
+    sp.add_argument("--yolo", action="store_true",
+                     help="launch Hermes with --yolo (no approval prompts); only when the user "
+                          "explicitly asked for a yolo session")
     sp = named("send", "send one message (multiline safe) and print Hermes's reply")
     sp.add_argument("text", nargs="?", help="message text; '-' reads stdin")
     sp.add_argument("-f", "--file", help="read the message from FILE")
@@ -131,7 +140,10 @@ def main(argv=None, bridge_factory=None, stdout=None, stderr=None) -> int:
         b.h.ensure_server()
         if args.cmd == "list":
             for r in b.list_sessions():
-                out.write("%-32s %-8s %-10s %s\n" % (r["name"], r["pane_id"] or "-", r["state"], r["session_id"] or "-"))
+                flags = b.store.load(r["name"]).get("launch_flags") or []
+                flags_col = "--yolo" if "--yolo" in flags else "-"
+                out.write("%-32s %-8s %-10s %-40s %s\n" % (
+                    r["name"], r["pane_id"] or "-", r["state"], r["session_id"] or "-", flags_col))
             return 0
         if args.cmd == "gc":
             for t in b.gc():
@@ -139,11 +151,15 @@ def main(argv=None, bridge_factory=None, stdout=None, stderr=None) -> int:
             return 0
         if args.cmd == "start":
             b.cfg = dataclasses.replace(b.cfg, start_timeout_ms=args.timeout * 1000)
-            a = b.start(name, HERMES_LAUNCH, fresh=args.fresh)
+            launch_flags = ["--yolo"] if args.yolo else []
+            a = b.start(name, build_hermes_launch(args.yolo), fresh=args.fresh)
+            b.store.save(name, launch_flags=launch_flags)
             st = b.state(name)[0]
             out.write("%s %s %s\n" % (name, a.get("pane_id"), st))
             return hb.state_exit(st) if st not in ("idle",) else 0
         if args.cmd == "send":
+            if "--yolo" in (b.store.load(name).get("launch_flags") or []):
+                err.write("hermes-bridge: this session runs with --yolo (no approval prompts)\n")
             state, reply, truncated, dialog = b.send(name, _text(args), args.timeout * 1000)
             out.write(reply + ("\n" if reply and not reply.endswith("\n") else ""))
             if truncated:
