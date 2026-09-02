@@ -15,7 +15,7 @@ Requires herdr ≥ 0.8.2 and python3. The bridge starts the `agents` herdr serve
 
 | Subcommand | Purpose |
 |---|---|
-| `start [NAME] [--fresh] [--timeout N]` | Launch or resume Hermes in a pane of herdr session `agents` (default timeout 120s; first start on a brand-new pane can take up to ~2 min while the bridge waits for the shell to settle) |
+| `start [NAME] [--fresh] [--timeout N] [--yolo]` | Launch or resume Hermes in a pane of herdr session `agents` (default timeout 120s; first start on a brand-new pane can take up to ~2 min while the bridge waits for the shell to settle) |
 | `send [NAME] TEXT` | Send one message (multiline safe) and print Hermes's reply (default timeout 600s) |
 | `state [NAME]` | Print `idle\|busy\|approval\|secret\|clarify\|blocked\|unknown\|dead\|missing`; always exits 0 except 9 if the herdr server can't be reached |
 | `wait [NAME] [--timeout N]` | Block until Hermes settles, then print the state |
@@ -32,7 +32,9 @@ Requires herdr ≥ 0.8.2 and python3. The bridge starts the `agents` herdr serve
 
 For multiline text use `send NAME -f FILE` or pipe stdin with `send NAME -` — multiline is now just an argument to `send`, not a separate subcommand. `--session NAME` still works everywhere as a deprecated alias for the positional NAME.
 
-**Argparse gotcha**: an option placed *between* NAME and the message text is rejected, e.g. `send bean --timeout 900 "hi"` errors out. Put options *after* the text (`send bean "hi" --timeout 900`), or avoid the ambiguity entirely with `send bean -f FILE`.
+## Argument order
+
+`hermes-bridge <cmd> NAME [TEXT] [--options]` — options go *after* the positionals, not between them: `send bean --timeout 900 "hi"` fails, `send bean "hi" --timeout 900` works, `send bean -f FILE --timeout 900` works (no TEXT positional to collide with). `--session NAME` is a deprecated alias for the NAME positional and cannot be combined with a NAME positional in the same call.
 
 ## Naming
 
@@ -60,7 +62,7 @@ NAME is the herdr agent name: `^[a-z][a-z0-9_-]{0,31}$` (lowercase start, then l
 | `clarify` | Hermes asked a clarifying question | answer directly via `send`/`answer` if you already know the answer from context |
 | `blocked` | A menu/prompt is open but herdr's rule set didn't classify it as approval/secret/clarify | `peek`, then surface the dialog to the human |
 | `unknown` | herdr couldn't classify the agent's status at all | don't retry blindly — `peek`/`log`, then treat like `dead` |
-| `dead` | Tab/pane present, Hermes process gone (crash) | don't retry sends; `start NAME` again |
+| `dead` | Tab/pane present, Hermes process gone (crash) | don't retry sends; `dead` after a turn (Ladybug crash) → `start NAME` resumes the same conversation; `--fresh` only when the user wants a new one |
 | `missing` | No tab/agent found for NAME | `start NAME` (auto-resumes the prior conversation unless `--fresh`) |
 
 State comes from herdr's own screen classification plus `agent explain NAME --json` (`matched_rule` sits at the JSON's top level), not from matching literal prompt symbols pinned to a Hermes version — a `hermes update` no longer requires re-verifying anything here.
@@ -96,7 +98,7 @@ This authority covers lifecycle only. It does NOT extend to approving Hermes's d
 
 ## Safety
 
-Never pass `--yolo` or `--tui` to Hermes (this bridge never does either). Never run `approve` unless the human user has just approved it in chat. Never use this bridge to relay instructions that make Hermes message an external platform (Telegram/Discord/Slack/etc.) on the user's behalf unless the user explicitly asked for that. Never `herdr session stop agents` as a way to dodge an approval decision.
+Never pass `--yolo` on your own initiative; use it only when the user explicitly asked for a yolo/autonomous Hermes session for this conversation, and say so in your reply; yolo sessions never produce `approval` states, so `approve`/`deny` do not apply. Never pass `--tui` to Hermes (this bridge never does). Never run `approve` unless the human user has just approved it in chat. Never use this bridge to relay instructions that make Hermes message an external platform (Telegram/Discord/Slack/etc.) on the user's behalf unless the user explicitly asked for that. Never `herdr session stop agents` as a way to dodge an approval decision.
 
 ## Gotchas
 

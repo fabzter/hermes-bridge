@@ -37,6 +37,10 @@ scripts/hermes-bridge list                         # every bridge session: name,
 
 NAME is a herdr agent name (`^[a-z][a-z0-9_-]{0,31}$`) — pick one stable name per purpose and reuse it for every call in that conversation/task. `log` is the one subcommand that takes no NAME (it tails a single shared log file). Distinct exit codes per state (3 approval, 4 secret, 5 clarify, 6 timeout, 7 dead, 8 busy, 9 server unreachable…) make it scriptable; `state` always exits 0 regardless of what it prints. See `SKILL.md` for the full contract, including the states table and known host issues.
 
+**Argument order**: options go *after* the positionals, not between them — `send cv --timeout 900 "hi"` fails, `send cv "hi" --timeout 900` works. `--session NAME` is a deprecated alias for the NAME positional and cannot be combined with one.
+
+**`--yolo` policy**: `start` accepts `--yolo` to launch Hermes with no approval prompts. It is never passed on the bridge's own initiative — only when the user explicitly asked for a yolo/autonomous Hermes session for this conversation. Yolo sessions never produce `approval` states, so `approve`/`deny` do not apply to them.
+
 ## How herdr is used
 
 The bridge doesn't manage terminals or panes directly — herdr does, and the bridge is a thin client over herdr's CLI/socket API:
@@ -48,7 +52,7 @@ The bridge doesn't manage terminals or panes directly — herdr does, and the br
 
 ## Design notes
 
-- **Fail-closed approvals**: `approve` always picks least-privilege "Allow once"; nothing is ever auto-approved, and `--yolo` is never used.
+- **Fail-closed approvals**: `approve` always picks least-privilege "Allow once"; nothing is ever auto-approved, and `--yolo` is used only on the user's explicit request for that session.
 - **No auto-approve, ever**: approval and secret prompts are always surfaced to the human first; the bridge itself never decides to proceed past one.
 - **Session ids come from herdr**, not from scraping pane text — see "How herdr is used" above.
 - **Stdlib only**: `hermes_bridge_cli.py` and `herdrbridge.py` use only the Python 3 standard library (`subprocess`, `socket`, `json`, `argparse`, `re`) — no dependencies to install.
@@ -89,13 +93,9 @@ hermes skills install fabzter/hermes-claude-bridge/claude-bridge --yes
 
 See [fabzter/hermes-claude-bridge](https://github.com/fabzter/hermes-claude-bridge).
 
-## Migration from the tmux version
+## Upgrading
 
-- **Names changed shape**: NAME is now a herdr agent name, `^[a-z][a-z0-9_-]{0,31}$` (lowercase, digits, `_`, `-`, ≤32 chars). Old names with dots or uppercase (`Hermes.Main`, `hermes.cv`, `Bean_1`) no longer validate — pick a conforming name instead. Existing hyphenated/lowercase names such as `hermes-cv`, `hermes-sync-prep`, `standup-2026-08-21` already conform and remain valid — no renaming needed.
-- **`send-file` is gone**: use `send NAME -f FILE` or pipe stdin with `send NAME -` for multiline messages.
-- **`--session NAME` still works** as a deprecated alias for the positional NAME argument.
-- **State storage moved**: per-session state now lives at `state/<name>.json` instead of the old flat `.session-id` files. Existing `<name>.session-id` files are picked up automatically the first time that name is used and migrated into the new format (renamed to `<name>.session-id.migrated` once done) — no manual migration step needed.
-- **No more tmux**: the bridge no longer manages tmux sessions or scrapes prompt glyphs pinned to a specific Hermes version; herdr owns the pane and the state detection instead.
+NAME must match `^[a-z][a-z0-9_-]{0,31}$`; per-session state lives at `state/<name>.json`, with any pre-existing `<name>.session-id` file picked up and migrated automatically the first time that name is used (renamed to `<name>.session-id.migrated` once done); `send NAME -f FILE` (or `send NAME -` for stdin) replaces the old `send-file` subcommand.
 
 ## Caveats
 

@@ -299,6 +299,12 @@ bridge, only coarsen it.
 - `keys NAME KEY…` (claude-bridge only): raw `agent send-keys`, for the human-
   authorized case where Hermes is told "approve Claude's prompt". The SKILL.md
   restricts it to that case and requires reading the dialog first.
+- **Bypass-mode policy (`--yolo` and equivalents)**: `--yolo`/bypass modes are
+  launched only on explicit user request; the default is prompts. `start`
+  refuses `--yolo` when the target session is already live without it, since
+  a live process can't be relaunched into a different mode; a session already
+  running with `--yolo` produces no `approval` states, so `approve`/`deny`
+  never apply to it. SKILL.md carries this as the authoritative policy text.
 
 ### 3.10 Shutdown and hygiene
 
@@ -326,7 +332,7 @@ CLI (positional NAME replaces the old mandatory `--session NAME`; `--session
 NAME` is still accepted as an alias for one release):
 
 ```
-hermes-bridge start   NAME [--fresh] [--timeout S]
+hermes-bridge start   NAME [--fresh] [--timeout S] [--yolo]
 hermes-bridge send    NAME (TEXT | -f FILE | -) [--timeout S]
 hermes-bridge state   NAME
 hermes-bridge wait    NAME [--timeout S]
@@ -352,7 +358,10 @@ the state table above; lifecycle authority text carried over from the
 current SKILL.md (Claude owns Hermes session lifecycle, gateway restart
 rule, the mid-approval exception); herdr restore/adoption nuance; the
 `done` vs `idle` note; knowledge-exchange recipes (unchanged in substance);
-the removal of every tmux reference.
+the removal of every tmux reference; the argument-order rule (options
+follow the positionals — `send NAME --timeout N TEXT` fails, `send NAME
+TEXT --timeout N` works); and the `--yolo` bypass-mode policy from §3.9
+(explicit user request only, never on the bridge's own initiative).
 
 ## 5. claude-bridge (Hermes → Claude) specifics
 
