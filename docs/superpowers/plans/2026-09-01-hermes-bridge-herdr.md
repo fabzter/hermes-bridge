@@ -23,6 +23,7 @@
 - Safety (spec §3.9): `approve` only navigates to "Allow once"; nothing is ever auto-approved; secrets are never typed.
 - Tests: `python3 -m unittest discover -s tests -v` from the repo root must pass before every commit.
 - Commit messages carry no attribution footers of any kind. Push after each task (`git push origin main`; the repo has a repo-local credential helper for the `fabzter` account).
+- No AI authorship attribution anywhere: commit messages, code comments, docstrings, READMEs and SKILL.md must not say the code was written or co-authored by an AI tool (Claude Code may be *mentioned as the agent the bridge talks to*, never as the author). Remove such sentences from existing docs you rewrite.
 
 ## File structure
 
