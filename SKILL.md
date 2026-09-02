@@ -7,83 +7,100 @@ description: Use when talking to Hermes, driving the user's personal Hermes Agen
 
 ## Overview
 
-`~/.claude/skills/hermes-bridge/scripts/hermes-bridge` is a tmux bridge that drives the user's local Hermes Agent CLI (`hermes chat --cli`) as a live, scriptable process — start it, send messages, poll for state, react to approval/secret/clarify prompts, stop it. It crash-resumes the same Hermes conversation automatically. Always invoke it by its absolute path.
+`~/.claude/skills/hermes-bridge/scripts/hermes-bridge` drives the user's local Hermes Agent CLI (`hermes chat --cli --source tool`) as a live, scriptable process, inside a pane of the named herdr session `agents` — start it, send messages, poll for state, react to approval/secret/clarify prompts, stop it. Always invoke it by its absolute path.
+
+Requires herdr ≥ 0.8.2 and python3. The bridge starts the `agents` herdr server itself if it isn't already running — no separate setup step.
 
 ## Quick Reference
 
 | Subcommand | Purpose |
 |---|---|
-| `start --session NAME [--fresh] [--timeout N]` | Launch (or resume) Hermes in tmux |
-| `send --session NAME MESSAGE` | Type one single-line message + Enter |
-| `send-file --session NAME FILE` | Send file content as one message (multiline safe) |
-| `wait --session NAME` | Block until idle or an action-needed state |
-| `peek --session NAME [-n LINES]` | Print recent pane text, no state change |
-| `state --session NAME` | Print `idle\|busy\|approval\|secret\|clarify\|dead\|missing` |
-| `session --session NAME` | Print the saved underlying Hermes session id |
-| `approve --session NAME` | Select "Allow once" in an approval menu |
-| `deny --session NAME [REASON]` | Select "Deny"; REASON is logged to stderr only |
-| `stop --session NAME` | Kill the tmux session |
-| `log [-n N]` | Tail `~/.hermes/logs/agent.log` |
+| `start [NAME] [--fresh] [--timeout N]` | Launch or resume Hermes in a pane of herdr session `agents` (default timeout 60s) |
+| `send [NAME] TEXT` | Send one message (multiline safe) and print Hermes's reply (default timeout 600s) |
+| `state [NAME]` | Print `idle\|busy\|approval\|secret\|clarify\|blocked\|unknown\|dead\|missing`; always exits 0 |
+| `wait [NAME] [--timeout N]` | Block until Hermes settles, then print the state |
+| `peek [NAME] [-n LINES]` | Print recent pane text, no state change (default 80 lines) |
+| `approve [NAME]` | Select "Allow once" in an approval menu — only after the human has said yes |
+| `deny [NAME] [REASON]` | Select "Deny"; REASON is logged to stderr only |
+| `answer [NAME] TEXT` | Answer a clarification prompt |
+| `session [NAME]` | Print the underlying Hermes session id (empty until the first turn completes) |
+| `stop [NAME]` | Send `/exit` and close the tab; conversation stays resumable; exits 0 even with nothing to stop |
+| `forget [NAME]` | Delete the stored session id for NAME (next `start` begins a brand-new conversation) |
+| `list` | List bridge sessions: name, pane, state, session id |
+| `gc` | Close tabs whose Hermes process has already exited |
+| `log [-n N]` | Tail `~/.hermes/logs/agent.log` (default 40 lines; no NAME — one shared log) |
 
-**`--session NAME` is MANDATORY on every subcommand except `log`.** There is no default — omitting it is a hard error (clear message + exit 1), not a silent fallback. This is deliberate: without a required name, every concurrent Claude Code session driving this bridge on the same machine would silently collide on one shared tmux session and one shared Hermes conversation (interleaved sends, crossed replies, one session's `stop` killing another's in-flight work). Pick **one stable name per purpose** and reuse it for every call in that conversation/task — e.g. `hermes-cv` for a CV-focused thread, `hermes-main` for a general one. Name rules: letters, digits, `.`, `_`, `-` only, 1-64 chars (`^[A-Za-z0-9._-]+$`); anything else (including `/`, which would otherwise let a crafted name escape the bridge's own state directory) is rejected with a clear error. `--timeout N` is still optional everywhere it's accepted; `approve`/`deny` parse it without erroring but ignore it — they always wait on the fixed internal default, not your value.
+For multiline text use `send NAME -f FILE` or pipe stdin with `send NAME -` — multiline is now just an argument to `send`, not a separate subcommand. `--session NAME` still works everywhere as a deprecated alias for the positional NAME.
 
-Exit codes: `0` ok, `1` generic error, `2` session missing, `3` approval, `4` secret, `5` clarify, `6` timeout, `7` dead, `8` busy (`send`/`send-file` only — refused rather than silently interrupting in-flight work). Two exceptions: `state` always exits `0` — read its printed word, not the exit code; `stop` on an already-missing session also exits `0` (nothing to stop is not an error).
+**Argparse gotcha**: an option placed *between* NAME and the message text is rejected, e.g. `send bean --timeout 900 "hi"` errors out. Put options *after* the text (`send bean "hi" --timeout 900`), or avoid the ambiguity entirely with `send bean -f FILE`.
+
+## Naming
+
+NAME is the herdr agent name: `^[a-z][a-z0-9_-]{0,31}$` (lowercase start, then lowercase/digits/`_`/`-`, ≤32 chars). Pick **one stable name per purpose** and reuse it for every call in that conversation/task — e.g. `cv`, `sync-prep`, `standup-2026-09-01`. Old names with dots or uppercase (`hermes-cv`, `Hermes.Main`) no longer validate — pick a new conforming name (`hermes-cv` → `cv`).
+
+## Exit Codes
+
+`0` ok, `1` generic error, `2` missing (no tab/agent found for NAME), `3` approval, `4` secret, `5` clarify, `6` timeout, `7` dead, `8` busy (`send` only — refused rather than silently interrupting in-flight work), `9` server (herdr server unreachable). Two exceptions: `state` always exits `0` — read its printed word, not the exit code; `stop` on an already-missing session also exits `0`.
 
 ## Workflow
 
-Pick a `--session NAME` for this conversation/task first, then use it on every call below.
-
-1. `start --session NAME` (add `--fresh` only if the user wants a brand-new conversation, not a resume).
-2. Always check `state --session NAME` before `send --session NAME ...` — don't send into approval/secret/clarify.
-3. Loop: `send --session NAME MESSAGE` (or `send-file --session NAME FILE` for multiline) → `wait --session NAME` → act on the resulting state → repeat.
-4. `stop --session NAME` at the end of the conversation, unless the user wants the session left running.
-
-Multiline messages MUST go through `send-file` — `send` rejects embedded newlines by design (Hermes's live REPL submits on Enter/LF; only bracketed paste, which `send-file` uses, inserts literal newlines).
-
-## Session Lifecycle — Claude decides (standing authority from the user, 2026-08-20)
-
-Claude owns the life and death of Hermes sessions on this machine; do not ask permission for lifecycle operations — decide, act, and mention what you did in the reply:
-
-- **Bridge sessions**: start/resume/`--fresh`/stop are your calls. Default: `stop` at conversation end; leave running only when ongoing work benefits. Hermes conversations are SQLite-persisted, so `stop` loses nothing — `start` resumes the same conversation.
-- **Stale/outdated Hermes processes** (e.g. long-lived `hermes --tui`/CLI sessions still running pre-upgrade code, zombie processes, sessions wedging the Ladybug DB lock): kill them (`kill PID`, then `-9` if ignored). Their conversations remain resumable (`hermes --continue <name>` / `hermes sessions list`), so the cost is only in-flight turn state. Always say in the reply which PIDs you killed and why.
-- **Gateway**: restart with `hermes gateway restart` (the sanctioned command — never launchctl bootout/bootstrap). Restart it after venv/plugin upgrades or config changes so it runs current code. Note in the reply that Telegram goes quiet for the duration.
-- **The one lifecycle exception**: a session that is mid-approval (⚠) — resolve or surface the approval first; never kill a session as a way to dodge an approval decision.
-
-This authority covers lifecycle only. It does NOT extend to approving Hermes's dangerous-command prompts (see States table), modifying Hermes config, or sending to external platforms.
+1. `start NAME` (add `--fresh` only if the user wants a brand-new conversation, not a resume).
+2. Always check `state NAME` before `send NAME ...` — don't send into approval/secret/clarify. herdr's own `agent prompt` also refuses to type into a blocked agent, so `send` never interrupts an in-flight approval.
+3. Loop: `send NAME MESSAGE` (or `send NAME -f FILE` for multiline) → act on the resulting state → repeat.
+4. `stop NAME` at the end of the conversation, unless the user wants the session left running.
 
 ## States and Required Handling
 
 | State | Meaning | Required handling |
 |---|---|---|
-| `idle` | Ready for input | safe to `send` |
+| `idle` | Ready for input (herdr's `idle` and `done` agent statuses both map here) | safe to `send` |
 | `busy` | Agent/tool running | `wait` |
-| `approval` (⚠) | Dangerous-command menu open | **surface to the human user in chat; only run `approve` after they say yes.** Never approve on your own initiative. |
-| `secret` (🔐/🔑) | Credential/secret prompt open | **surface to the human user; do not type a secret into the pane yourself** |
-| `clarify` (?/✎) | Hermes asked a clarifying question | you may answer directly via `send` if you already know the answer from context |
-| `dead` | tmux session present, Hermes process gone | don't retry sends; check `log`, then `start` again |
-| `missing` | No tmux session (or crash destroyed it) | `start` (auto-resumes prior conversation unless `--fresh`) |
+| `approval` | Dangerous-command menu open | **surface to the human in chat; only run `approve` after they say yes.** Never approve on your own initiative. |
+| `secret` | Credential/secret prompt open | **surface to the human; never type the secret into the pane yourself** |
+| `clarify` | Hermes asked a clarifying question | answer directly via `send`/`answer` if you already know the answer from context |
+| `blocked` | A menu/prompt is open but herdr's rule set didn't classify it as approval/secret/clarify | `peek`, then surface the dialog to the human |
+| `unknown` | herdr couldn't classify the agent's status at all | don't retry blindly — `peek`/`log`, then treat like `dead` |
+| `dead` | Tab/pane present, Hermes process gone (crash) | don't retry sends; `start NAME` again |
+| `missing` | No tab/agent found for NAME | `start NAME` (auto-resumes the prior conversation unless `--fresh`) |
 
-Safety, non-negotiable: never pass `--yolo` or `--tui` to Hermes (this script never does either). Never run `approve` unless the human user has just approved it in chat. Never use this bridge to relay instructions that make Hermes message an external platform (Telegram/Discord/Slack/etc.) on the user's behalf unless the user explicitly asked for that.
+State comes from herdr's own screen classification plus `agent explain NAME --json` (`matched_rule` sits at the JSON's top level), not from matching literal prompt symbols pinned to a Hermes version — a `hermes update` no longer requires re-verifying anything here.
+
+## Session Lifecycle — Claude decides (standing authority from the user, 2026-08-20)
+
+Claude owns the life and death of Hermes sessions on this machine; do not ask permission for lifecycle operations — decide, act, and mention what you did in the reply:
+
+- **Bridge sessions**: start/resume/`--fresh`/stop are your calls. Default: `stop` at conversation end; leave running only when ongoing work benefits. Hermes conversations are persisted, so `stop` loses nothing — `start` resumes the same conversation.
+- **Stale panes**: clean them with `gc` (closes tabs whose Hermes process has already exited). Foreign same-name agents cannot occur — herdr enforces unique agent names within the `agents` session, so `start NAME` never collides with something else already using that name.
+- **Stale/outdated Hermes processes** (e.g. long-lived sessions still running pre-upgrade code, zombie processes, sessions wedging the Ladybug DB lock): kill them (`kill PID`, then `-9` if ignored). Their conversations remain resumable, so the cost is only in-flight turn state. Always say in the reply which PIDs you killed and why.
+- **Gateway**: restart with `hermes gateway restart` (the sanctioned command — never launchctl bootout/bootstrap). Restart it after venv/plugin upgrades or config changes so it runs current code. Note in the reply that Telegram goes quiet for the duration.
+- **The one lifecycle exception**: a session that is mid-approval — resolve or surface the approval first; never stop/kill a session as a way to dodge an approval decision.
+
+This authority covers lifecycle only. It does NOT extend to approving Hermes's dangerous-command prompts (see States table), modifying Hermes config, or sending to external platforms.
+
+## herdr Specifics You Must Know
+
+- **Session id timing**: the Hermes session id only exists after Hermes's first LLM call, so `session NAME` right after `start` may report none known yet — send one message first.
+- **Server restarts don't duplicate agents**: after a herdr server restart, herdr relaunches `hermes --resume <id>` on its own and keeps the same name; `start NAME` finds it rather than creating a second one.
+- **Known host issue — Hermes segfaults after a turn**: a native crash in the LadybugDB memory provider (`_lbug`) has been observed right after Hermes completes a turn, both in resumed sessions and on the second turn of otherwise-fresh sessions. The bridge reports `dead`. Remedy: `start NAME` again (the conversation resumes from the saved session id). If it keeps dying, tell the user this is a Hermes/Ladybug problem, not something to work around — never pass `--yolo`, never modify Hermes's own config.
+- **Fresh-start race**: starting a brand-new session can occasionally hit a herdr `agent_pane_busy`/startup-timeout race (the tab exists before its pane is recognized as ready, or Hermes's welcome-screen LLM call hasn't finished). A second `start NAME` on the same name reliably succeeds. An upstream herdr fix is in progress — for now, just retry once.
+- **Approval menu unreadable**: `approve`/`deny` refuse with "approval menu not recognized" when herdr's screen parser can't read the current menu render. When that happens, `peek` the dialog and surface it to the human — never press keys manually to approve or deny on their behalf.
+- **Human visibility**: the human can watch live with `herdr session attach agents` or `HERDR_SESSION=agents herdr agent attach NAME`.
 
 ## Knowledge-Exchange Recipes
 
 **Learn about the user (read-only, ground truth, no session needed):** read `~/.hermes/memories/USER.md` and `~/.hermes/memories/MEMORY.md` directly, or `~/.hermes/SOUL.md` for persona/behavior rules. Faster than asking Hermes and always current on disk.
 
-**Ask Hermes directly:** `start --session NAME` → `send --session NAME "..."` → `wait --session NAME` → `peek --session NAME`. Simplest when the answer requires Hermes's own reasoning, not just its memory files.
+**Ask Hermes directly:** `start NAME` → `send NAME "..."` → check the printed state → `peek NAME` if you need more than the extracted reply. Simplest when the answer requires Hermes's own reasoning, not just its memory files.
 
-**Teach Hermes something:** `send-file` a message asking it to remember, or drive `/learn` in-session to capture a reusable skill. Memory writes may be approval-gated (`⚠`) — handle per the approval row above. Memory is a **frozen snapshot taken at session start**: a fact taught mid-session won't be reflected in that same session's behavior. To verify it landed, `stop` and `start` a fresh session (or `start --fresh` for a wholly new conversation) and probe again.
+**Teach Hermes something:** `send NAME -f FILE` a message asking it to remember, or drive `/learn` in-session to capture a reusable skill. Memory writes may be approval-gated — handle per the approval row above. Memory is a **frozen snapshot taken at session start**: a fact taught mid-session won't be reflected in that same session's behavior. To verify it landed, `stop` and `start` a fresh session (or `start NAME --fresh` for a wholly new conversation) and probe again.
 
-## Slash Commands Worth Knowing
+## Safety
 
-`/help /learn /memory /journey /init /steer /queue /approve /deny` — typed via `send` like any message once `state` is idle. (`/quit` is not listed: the script itself only ever sends `/exit`, and `/quit` was never independently confirmed — if you need to exit the CLI's own session from inside a message, use `/exit`.)
+Never pass `--yolo` or `--tui` to Hermes (this bridge never does either). Never run `approve` unless the human user has just approved it in chat. Never use this bridge to relay instructions that make Hermes message an external platform (Telegram/Discord/Slack/etc.) on the user's behalf unless the user explicitly asked for that. Never `herdr session stop agents` as a way to dodge an approval decision.
 
 ## Gotchas
 
 - **NO_REPLY persona rule**: Hermes's "Raw Means Raw" behavior means a short or empty reply can be intentional, not a bridge failure — don't treat it as an error by default.
-- **Paste-collapse**: very large `send-file` payloads get auto-collapsed by Hermes into a temp-file reference in its UI; this is normal Hermes behavior.
-- **Crash usually surfaces as `missing`/exit 2, not `dead`/exit 7**: a resume/respawn launch runs Hermes as the pane's own direct-argv process, so a crash destroys the tmux session itself — use `log` for post-mortem diagnostics, not `peek`. Exception: the very first-ever `start` (no saved session id yet) types `hermes chat ...` into a live shell instead, so if Hermes crashes there the shell survives and you'll see `dead`/exit 7 instead; same remediation (`log`, then `start` again).
-- **A malformed saved session id self-heals, it does not error**: `start` warns on stderr and silently proceeds as a normal fresh launch — it does NOT fail. `--fresh` is for deliberately abandoning a valid saved conversation and starting a new one on purpose, not an error-recovery step.
-- **A stale-but-correctly-formatted saved session id does NOT self-heal.** Unlike a malformed one, a validly-formatted id that Hermes itself no longer recognizes (e.g. pruned from its own session store) makes `start` retry `--resume <that id>` every single time, fail to reach idle the same way every time, and exit `2` every time. If `start` keeps exiting `2` with a saved id in play, don't keep retrying plain `start` — run `start --fresh` instead.
-- **Foreign tmux session under your chosen name**: `--session NAME` is caller-chosen (no fixed/default name), and every subcommand refuses to touch a session already running under that NAME that this script didn't create itself (ownership marker) — this matters more now than when there was one fixed name, since a name you pick (e.g. `hermes-cv`) could coincidentally already be in use for something unrelated. Under the lifecycle authority above you may `tmux kill-session -t NAME` yourself — peek at its content first (`tmux capture-pane -p -t NAME | tail`) to confirm it's a stale Hermes leftover and not something unrelated the user is using that name for; say what you found and did in the reply.
-- **Glyph detection is version-pinned to Hermes v0.20.0.** After the user runs `hermes update`, re-verify with a manual `start` + `peek` before trusting `state` again.
-- Alternative non-tmux path for one-shot exchanges that don't need live approval handling: `hermes -z "..." --resume <id>` (get `<id>` from this bridge's `session` subcommand).
+- **`send` exits with the state code, not a delivery flag**: if the agent was blocked before the message could even be typed, the printed reply is empty and the dialog text is prefixed `MESSAGE NOT DELIVERED` — never assume a message landed just because `send` returned an approval/secret/clarify state; check for that prefix.
+- **Paste-collapse**: very large `send -f` payloads get auto-collapsed by Hermes into a temp-file reference in its UI; this is normal Hermes behavior.
+- **Truncated replies**: reply extraction falls back to the raw pane tail and warns on stderr when the expected echo line isn't found. If a reply looks cut off, `peek NAME -n 200` for the full text.
