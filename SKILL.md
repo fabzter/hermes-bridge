@@ -17,7 +17,7 @@ Requires herdr ≥ 0.8.2 and python3. The bridge starts the `agents` herdr serve
 |---|---|
 | `start [NAME] [--fresh] [--timeout N]` | Launch or resume Hermes in a pane of herdr session `agents` (default timeout 120s; first start on a brand-new pane can take up to ~2 min while the bridge waits for the shell to settle) |
 | `send [NAME] TEXT` | Send one message (multiline safe) and print Hermes's reply (default timeout 600s) |
-| `state [NAME]` | Print `idle\|busy\|approval\|secret\|clarify\|blocked\|unknown\|dead\|missing`; always exits 0 |
+| `state [NAME]` | Print `idle\|busy\|approval\|secret\|clarify\|blocked\|unknown\|dead\|missing`; always exits 0 except 9 if the herdr server can't be reached |
 | `wait [NAME] [--timeout N]` | Block until Hermes settles, then print the state |
 | `peek [NAME] [-n LINES]` | Print recent pane text, no state change (default 80 lines) |
 | `approve [NAME]` | Select "Allow once" in an approval menu — only after the human has said yes |
@@ -36,11 +36,11 @@ For multiline text use `send NAME -f FILE` or pipe stdin with `send NAME -` — 
 
 ## Naming
 
-NAME is the herdr agent name: `^[a-z][a-z0-9_-]{0,31}$` (lowercase start, then lowercase/digits/`_`/`-`, ≤32 chars). Pick **one stable name per purpose** and reuse it for every call in that conversation/task — e.g. `cv`, `sync-prep`, `standup-2026-09-01`. Old names with dots or uppercase (`hermes-cv`, `Hermes.Main`) no longer validate — pick a new conforming name (`hermes-cv` → `cv`).
+NAME is the herdr agent name: `^[a-z][a-z0-9_-]{0,31}$` (lowercase start, then lowercase/digits/`_`/`-`, ≤32 chars). Pick **one stable name per purpose** and reuse it for every call in that conversation/task — e.g. `cv`, `sync-prep`, `standup-2026-09-01`. Names with dots or uppercase letters (`Hermes.Main`, `hermes.cv`, `Bean_1`) no longer validate — pick a conforming name instead. Existing hyphenated/lowercase names such as `hermes-cv`, `hermes-sync-prep`, `standup-2026-08-21` already conform and remain valid — no renaming needed. They migrate automatically on first use: their `.session-id` files become `.json` and are renamed `.session-id.migrated`.
 
 ## Exit Codes
 
-`0` ok, `1` generic error, `2` missing (no tab/agent found for NAME), `3` approval (also the exit for the generic `blocked` state), `4` secret, `5` clarify, `6` timeout, `7` dead (also the exit for `unknown`), `8` busy (`send` only — refused rather than silently interrupting in-flight work), `9` server (herdr server unreachable). Two exceptions: `state` always exits `0` — read its printed word, not the exit code; `stop` on an already-missing session also exits `0`.
+`0` ok, `1` generic error, `2` missing (no tab/agent found for NAME), `3` approval (also the exit for the generic `blocked` state), `4` secret, `5` clarify, `6` timeout, `7` dead (also the exit for `unknown`), `8` busy — refused rather than silently interrupting in-flight work; not `send`-only, `start`/`wait`/`answer` can exit `8` too, `9` server (herdr server unreachable). Exceptions: `state` always exits `0` except `9` when the herdr server can't be reached — read its printed word, not the exit code otherwise; `stop` on an already-missing session also exits `0`.
 
 ## Workflow
 

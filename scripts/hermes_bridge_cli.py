@@ -36,7 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = named("start", "launch or resume Hermes in herdr session 'agents'")
     sp.add_argument("--fresh", action="store_true", help="abandon the stored conversation; start a new one")
-    sp.add_argument("--timeout", type=int, default=60, help="startup timeout seconds")
+    sp.add_argument("--timeout", type=int, default=120, help="startup timeout seconds")
     sp = named("send", "send one message (multiline safe) and print Hermes's reply")
     sp.add_argument("text", nargs="?", help="message text; '-' reads stdin")
     sp.add_argument("-f", "--file", help="read the message from FILE")
@@ -69,6 +69,8 @@ def _name(args) -> str:
 
 
 def _text(args) -> str:
+    if args.file and args.text:
+        raise hb.UsageError("give TEXT or -f FILE, not both")
     if args.file:
         try:
             with open(args.file, "r", encoding="utf-8") as f:
@@ -97,8 +99,9 @@ def _apply_legacy_session_alias(args) -> None:
     pos_attr = _LEGACY_POSITIONAL.get(args.cmd)
     if not pos_attr:
         return
-    if (getattr(args, "session_alias", None) and getattr(args, pos_attr, None) in (None, "")
-            and getattr(args, "name", None)):
+    if getattr(args, "session_alias", None) and getattr(args, "name", None):
+        if getattr(args, pos_attr, None) not in (None, ""):
+            raise hb.UsageError("--session and a NAME positional cannot both be given")
         setattr(args, pos_attr, args.name)
         args.name = None
 
@@ -114,7 +117,10 @@ def main(argv=None, bridge_factory=None, stdout=None, stderr=None) -> int:
         if args.cmd == "log":
             cp = subprocess.run(["tail", "-n", str(args.lines), HERMES_LOG], capture_output=True, text=True)
             out.write(cp.stdout)
-            return 0 if cp.returncode == 0 else hb.EXIT_ERROR
+            if cp.returncode != 0:
+                err.write(cp.stderr)
+                return hb.EXIT_ERROR
+            return 0
         # Validate NAME (and apply the legacy --session shift) before touching herdr at all,
         # so a bad invocation exits 2 even when the server/bridge would be unavailable.
         name = None
@@ -144,6 +150,9 @@ def main(argv=None, bridge_factory=None, stdout=None, stderr=None) -> int:
                 err.write("hermes-bridge: reply anchor not found; printed best-effort tail (may be truncated)\n")
             if dialog:
                 out.write("\n[hermes-bridge] Hermes is now %s; dialog:\n%s\n" % (state, dialog.rstrip()))
+            if dialog.startswith("MESSAGE NOT DELIVERED") and hb.state_exit(state) == hb.EXIT_OK:
+                err.write("hermes-bridge: message was NOT delivered (agent was blocked before input)\n")
+                return hb.EXIT_ERROR
             return hb.state_exit(state)
         if args.cmd == "state":
             out.write(b.state(name)[0] + "\n")
@@ -158,13 +167,13 @@ def main(argv=None, bridge_factory=None, stdout=None, stderr=None) -> int:
         if args.cmd == "approve":
             st = b.navigate_menu(name, "Allow once")
             out.write(st + "\n")
-            return 0
+            return hb.state_exit(st) if st != "busy" else 0
         if args.cmd == "deny":
             if args.reason:
                 err.write("hermes-bridge: deny reason: %s\n" % args.reason)
             st = b.navigate_menu(name, "Deny")
             out.write(st + "\n")
-            return 0
+            return hb.state_exit(st) if st != "busy" else 0
         if args.cmd == "answer":
             st = b.answer(name, args.text)
             out.write(st + "\n")

@@ -3,7 +3,7 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")/../.." && pwd)"
 export HERDR_BRIDGE_SESSION="bridge-test-$$"
-B="python3 $here/scripts/hermes-bridge"; [[ -x $here/scripts/hermes-bridge && ! -f $here/scripts/hermes-bridge.new ]] && B="$here/scripts/hermes-bridge"
+B="$here/scripts/hermes-bridge"
 cleanup() { HERDR_SESSION="$HERDR_BRIDGE_SESSION" herdr session stop "$HERDR_BRIDGE_SESSION" --json >/dev/null 2>&1 || true
             herdr session delete "$HERDR_BRIDGE_SESSION" --json >/dev/null 2>&1 || true; }
 trap cleanup EXIT

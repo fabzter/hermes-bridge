@@ -44,7 +44,7 @@ The bridge doesn't manage terminals or panes directly — herdr does, and the br
 - **One named herdr session, `agents`**, holds every bridge conversation as its own tab/pane; the bridge starts that server itself if it isn't already running.
 - Sending a message is a single atomic call: `agent prompt NAME TEXT --wait`, which honors bracketed paste (multiline safe), refuses to type into a blocked agent, and waits server-side for the settled state — no polling loop needed on our end.
 - State detection comes from herdr's own screen classification plus `agent explain NAME --json`, which names the matched rule (dangerous-command approval, credential prompt, clarification prompt, etc.) instead of the bridge doing its own prompt-symbol matching.
-- Session identity is native: the Hermes integration reports the underlying Hermes session id to herdr, exposed via `agent get`. After a herdr server restart, herdr relaunches `hermes --resume <id>` on its own and keeps the same agent name, so `start` finds the existing agent instead of creating a duplicate.
+- Session identity is native: the Hermes integration reports the underlying Hermes session id to herdr, exposed via `agent list`. After a herdr server restart, herdr relaunches `hermes --resume <id>` on its own and keeps the same agent name, so `start` finds the existing agent instead of creating a duplicate.
 
 ## Design notes
 
@@ -91,7 +91,7 @@ See [fabzter/hermes-claude-bridge](https://github.com/fabzter/hermes-claude-brid
 
 ## Migration from the tmux version
 
-- **Names changed shape**: NAME is now a herdr agent name, `^[a-z][a-z0-9_-]{0,31}$` (lowercase, digits, `_`, `-`, ≤32 chars). Old names with dots or uppercase (`hermes-cv`) no longer validate — pick a new conforming name (`hermes-cv` → `cv`).
+- **Names changed shape**: NAME is now a herdr agent name, `^[a-z][a-z0-9_-]{0,31}$` (lowercase, digits, `_`, `-`, ≤32 chars). Old names with dots or uppercase (`Hermes.Main`, `hermes.cv`, `Bean_1`) no longer validate — pick a conforming name instead. Existing hyphenated/lowercase names such as `hermes-cv`, `hermes-sync-prep`, `standup-2026-08-21` already conform and remain valid — no renaming needed.
 - **`send-file` is gone**: use `send NAME -f FILE` or pipe stdin with `send NAME -` for multiline messages.
 - **`--session NAME` still works** as a deprecated alias for the positional NAME argument.
 - **State storage moved**: per-session state now lives at `state/<name>.json` instead of the old flat `.session-id` files. Existing `<name>.session-id` files are picked up automatically the first time that name is used and migrated into the new format (renamed to `<name>.session-id.migrated` once done) — no manual migration step needed.
