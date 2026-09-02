@@ -4,7 +4,7 @@
 # Set HERDRBRIDGE_DIR=/path/to/local/clone to copy from a local checkout instead of GitHub.
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
-dest="$here/scripts"
+dest="$here/skills/hermes-bridge/scripts"
 ref="${1:-$(cat "$dest/herdrbridge.version" 2>/dev/null || echo main)}"
 src="${HERDRBRIDGE_DIR:-}"
 fetch() { if [[ -n $src ]]; then cp "$src/$1" "$2"; else curl -fsSL "https://raw.githubusercontent.com/fabzter/herdrbridge/$ref/$1" -o "$2"; fi; }
@@ -15,7 +15,7 @@ for f in claude_reply.txt hermes_reply.txt hermes_before.txt hermes_approval_men
   fetch "tests/fixtures/$f" "$here/tests/fixtures/$f" || echo "note: fixture $f not available at $ref"
 done
 # fakes.py in the library repo imports from "..": point it at the vendored location here.
-sed -i '' 's#os.path.join(os.path.dirname(__file__), "..")#os.path.join(os.path.dirname(__file__), "..", "scripts")#' "$here/tests/fakes.py"
+sed -i '' 's#os.path.join(os.path.dirname(__file__), "..")#os.path.join(os.path.dirname(__file__), "..", "skills", "hermes-bridge", "scripts")#' "$here/tests/fakes.py"
 if [[ -n $src ]]; then ( cd "$src" && git rev-parse HEAD ) > "$dest/herdrbridge.version"
 else curl -fsSL "https://api.github.com/repos/fabzter/herdrbridge/commits/$ref" | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])' > "$dest/herdrbridge.version"; fi
 echo "vendored herdrbridge @ $(cat "$dest/herdrbridge.version")"

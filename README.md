@@ -4,14 +4,32 @@ A Python bridge that lets [Claude Code](https://claude.com/claude-code) drive th
 
 Claude Code is the agent that *uses* this bridge to reach Hermes; it does not run inside it.
 
+## Installation
+
+This repo is a Claude Code plugin, published through a personal marketplace:
+
+```bash
+claude plugin marketplace add fabzter/claude-plugins
+claude plugin install hermes-bridge@fabzter
+```
+
+To pick up updates later:
+
+```bash
+claude plugin update hermes-bridge@fabzter
+```
+
+The `hermes-bridge` skill is then available as `hermes-bridge:hermes-bridge`. The dev clone of this repo lives at `~/src/hermes-bridge` — that's where `tools/sync-lib.sh` and the test suite are run from; it is not itself on the plugin install path.
+
 ## What's inside
 
 | File | Purpose |
 |---|---|
-| `scripts/hermes-bridge` | Thin launcher — resolves `sys.path` and calls into `hermes_bridge_cli.main()` |
-| `scripts/hermes_bridge_cli.py` | The CLI: argument parsing, subcommands, exit-code mapping |
-| `scripts/herdrbridge.py` | Vendored copy of the shared `herdrbridge` library (state store, herdr socket/CLI client, reply extraction, menu navigation) |
-| `SKILL.md` | Claude Code skill that teaches any session how to use the bridge safely |
+| `.claude-plugin/plugin.json` | Plugin manifest (name, description, author, repository) |
+| `skills/hermes-bridge/SKILL.md` | Claude Code skill that teaches any session how to use the bridge safely |
+| `skills/hermes-bridge/scripts/hermes-bridge` | Thin launcher — resolves `sys.path` and calls into `hermes_bridge_cli.main()` |
+| `skills/hermes-bridge/scripts/hermes_bridge_cli.py` | The CLI: argument parsing, subcommands, exit-code mapping |
+| `skills/hermes-bridge/scripts/herdrbridge.py` | Vendored copy of the shared `herdrbridge` library (state store, herdr socket/CLI client, reply extraction, menu navigation) |
 | `tools/sync-lib.sh` | Re-vendors `herdrbridge.py` (+ test fakes/fixtures) from the canonical library repo at a pinned ref |
 | `tests/` | Unit tests (fakes, no live herdr/Hermes needed) |
 | `tests/live/e2e_hermes.sh` | End-to-end check against a real herdr server and real Hermes, in a throwaway named session |
@@ -25,17 +43,19 @@ Claude Code is the agent that *uses* this bridge to reach Hermes; it does not ru
 ## Usage
 
 ```bash
-scripts/hermes-bridge start cv                    # launch (or resume) Hermes in herdr session "agents"
-scripts/hermes-bridge send cv "hello"              # one message -> prints Hermes's reply
-scripts/hermes-bridge send cv -f msg.md            # multiline, from a file
-scripts/hermes-bridge state cv                     # idle|busy|approval|secret|clarify|blocked|unknown|dead|missing
-scripts/hermes-bridge approve cv                   # act on a dangerous-command menu (human-gated)
-scripts/hermes-bridge deny cv "not needed"
-scripts/hermes-bridge stop cv                      # /exit + close the tab (conversation stays resumable)
-scripts/hermes-bridge list                         # every bridge session: name, pane, state, session id, launch flags (--yolo or -)
+skills/hermes-bridge/scripts/hermes-bridge start cv                    # launch (or resume) Hermes in herdr session "agents"
+skills/hermes-bridge/scripts/hermes-bridge send cv "hello"              # one message -> prints Hermes's reply
+skills/hermes-bridge/scripts/hermes-bridge send cv -f msg.md            # multiline, from a file
+skills/hermes-bridge/scripts/hermes-bridge state cv                     # idle|busy|approval|secret|clarify|blocked|unknown|dead|missing
+skills/hermes-bridge/scripts/hermes-bridge approve cv                   # act on a dangerous-command menu (human-gated)
+skills/hermes-bridge/scripts/hermes-bridge deny cv "not needed"
+skills/hermes-bridge/scripts/hermes-bridge stop cv                      # /exit + close the tab (conversation stays resumable)
+skills/hermes-bridge/scripts/hermes-bridge list                         # every bridge session: name, pane, state, session id, launch flags (--yolo or -)
 ```
 
-NAME is a herdr agent name (`^[a-z][a-z0-9_-]{0,31}$`) — pick one stable name per purpose and reuse it for every call in that conversation/task. `log` is the one subcommand that takes no NAME (it tails a single shared log file). Distinct exit codes per state (3 approval, 4 secret, 5 clarify, 6 timeout, 7 dead, 8 busy, 9 server unreachable…) make it scriptable; `state` exits 0 for whatever state it prints — except 2 on an invalid NAME, 1 if NAME matches multiple live agents, and 9 if the herdr server can't be reached. See `SKILL.md` for the full contract, including the states table and known host issues.
+From inside a Claude Code session using the installed plugin, invoke it as `${CLAUDE_PLUGIN_ROOT}/skills/hermes-bridge/scripts/hermes-bridge ...` instead — see `skills/hermes-bridge/SKILL.md`.
+
+NAME is a herdr agent name (`^[a-z][a-z0-9_-]{0,31}$`) — pick one stable name per purpose and reuse it for every call in that conversation/task. `log` is the one subcommand that takes no NAME (it tails a single shared log file). Distinct exit codes per state (3 approval, 4 secret, 5 clarify, 6 timeout, 7 dead, 8 busy, 9 server unreachable…) make it scriptable; `state` exits 0 for whatever state it prints — except 2 on an invalid NAME, 1 if NAME matches multiple live agents, and 9 if the herdr server can't be reached. See `skills/hermes-bridge/SKILL.md` for the full contract, including the states table and known host issues.
 
 **Argument order**: options go *after* the positionals, not between them — `send cv --timeout 900 "hi"` fails, `send cv "hi" --timeout 900` works. `--session NAME` is a deprecated alias for the NAME positional and cannot be combined with one.
 
@@ -77,13 +97,13 @@ See `tests/live/README.md` for what it exercises and expects.
 
 ## The vendored library
 
-The state store, herdr client, reply-extraction, and menu-navigation logic live in [`fabzter/herdrbridge`](https://github.com/fabzter/herdrbridge), a shared library used by both directions of this bridge pair. This repo vendors a pinned copy at `scripts/herdrbridge.py` (pin recorded in `scripts/herdrbridge.version`). To pull in a newer pinned commit:
+The state store, herdr client, reply-extraction, and menu-navigation logic live in [`fabzter/herdrbridge`](https://github.com/fabzter/herdrbridge), a shared library used by both directions of this bridge pair. This repo vendors a pinned copy at `skills/hermes-bridge/scripts/herdrbridge.py` (pin recorded in `skills/hermes-bridge/scripts/herdrbridge.version`). To pull in a newer pinned commit:
 
 ```bash
 tools/sync-lib.sh [REF]   # REF defaults to the currently pinned commit, else main
 ```
 
-Change the library in its own repo first, then re-vendor here — don't hand-edit `scripts/herdrbridge.py` directly.
+Change the library in its own repo first, then re-vendor here — don't hand-edit `skills/hermes-bridge/scripts/herdrbridge.py` directly.
 
 ## The other direction: Hermes → Claude Code
 

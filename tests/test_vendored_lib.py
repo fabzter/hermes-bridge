@@ -1,7 +1,7 @@
 # tests/test_vendored_lib.py
 import os, sys, unittest
 sys.path.insert(0, os.path.dirname(__file__))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "skills", "hermes-bridge", "scripts"))
 import herdrbridge as hb
 from fakes import FakeHerdr, agent, ok
 
@@ -22,7 +22,7 @@ class VendoredLibTests(unittest.TestCase):
         self.assertEqual(h.cli("agent", "list")["result"]["agents"][0]["name"], "x")
 
     def test_version_stamp_present(self):
-        p = os.path.join(os.path.dirname(__file__), "..", "scripts", "herdrbridge.version")
+        p = os.path.join(os.path.dirname(__file__), "..", "skills", "hermes-bridge", "scripts", "herdrbridge.version")
         self.assertTrue(os.path.exists(p))
 
 

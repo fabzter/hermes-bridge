@@ -1,0 +1,11 @@
+{
+  "name": "hermes-bridge",
+  "description": "Drive the user's local Hermes Agent (Bean) from Claude Code through herdr: start, send, approve, answer, stop named sessions",
+  "author": {
+    "name": "Fabrizio Hernández",
+    "url": "https://github.com/fabzter"
+  },
+  "homepage": "https://github.com/fabzter/hermes-bridge",
+  "repository": "https://github.com/fabzter/hermes-bridge",
+  "keywords": ["hermes", "herdr", "agent", "bridge"]
+}

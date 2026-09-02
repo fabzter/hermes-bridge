@@ -1,7 +1,7 @@
 # tests/test_cli.py
 import io, os, sys, tempfile, types, unittest
 sys.path.insert(0, os.path.dirname(__file__))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "skills", "hermes-bridge", "scripts"))
 import herdrbridge as hb
 import hermes_bridge_cli as cli
 from fakes import FakeHerdr, agent, ok, WS

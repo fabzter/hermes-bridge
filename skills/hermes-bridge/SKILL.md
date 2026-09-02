@@ -7,7 +7,7 @@ description: Use when talking to Hermes, driving the user's personal Hermes Agen
 
 ## Overview
 
-`~/.claude/skills/hermes-bridge/scripts/hermes-bridge` drives the user's local Hermes Agent CLI (`hermes chat --cli --source tool`) as a live, scriptable process, inside a pane of the named herdr session `agents` — start it, send messages, poll for state, react to approval/secret/clarify prompts, stop it. Always invoke it by its absolute path.
+`${CLAUDE_PLUGIN_ROOT}/skills/hermes-bridge/scripts/hermes-bridge` drives the user's local Hermes Agent CLI (`hermes chat --cli --source tool`) as a live, scriptable process, inside a pane of the named herdr session `agents` — start it, send messages, poll for state, react to approval/secret/clarify prompts, stop it. `${CLAUDE_PLUGIN_ROOT}` expands to this plugin's install directory; always invoke it by that absolute path.
 
 Requires herdr ≥ 0.8.2 and python3. The bridge starts the `agents` herdr server itself if it isn't already running — no separate setup step.
 
