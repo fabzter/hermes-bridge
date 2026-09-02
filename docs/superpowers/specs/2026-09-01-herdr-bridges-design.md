@@ -42,7 +42,11 @@ hand-rolled:
 
 herdr's CLI and socket work from outside a pane (verified: `herdr workspace
 list`, raw `ping` over `~/.config/herdr/herdr.sock`), so neither agent has to
-live inside herdr for the bridges to use it.
+live inside herdr for the bridges to use it. A live spike on 2026-09-01 in an
+isolated named session confirmed the end-to-end path: `agent start --kind
+hermes -- chat --cli --source tool`, `agent prompt --wait`, reply readable via
+`agent read --source recent-unwrapped`, session id surfaced in
+`agent_session`, and headless restore after a server restart.
 
 ## 2. Goals and non-goals
 
@@ -86,22 +90,41 @@ without the exec bit, so the Hermes side is always invoked as
 | Long-lived status stream (watcher) | raw socket `events.subscribe` |
 | Server liveness | raw socket `ping` |
 
-Socket path resolution follows herdr: `HERDR_SOCKET_PATH`, else
-`HERDR_SESSION` → `~/.config/herdr/sessions/<name>/herdr.sock`, else
-`~/.config/herdr/herdr.sock`. Both bridges only ever talk to one session; the
-default is fine.
+**Both bridges live in the named herdr session `agents`** (decision
+2026-09-01), never in the user's default session. Every `herdr` CLI call is
+made with `HERDR_SESSION=agents` in its environment, and the raw socket client
+connects to `~/.config/herdr/sessions/agents/herdr.sock`. Named sessions are
+fully separate runtime namespaces (own server process, socket, `session.json`
+and restore state), so:
+
+- the bridges cannot see or disturb the user's own workspaces, and the user's
+  everyday `herdr` sidebar does not show bridge panes;
+- auto-start only ever starts the `agents` server;
+- `herdr session stop agents` is a complete kill switch for everything the
+  bridges created, and `herdr session delete agents` wipes their persisted
+  layout.
+
+The human watches or intervenes with `herdr session attach agents` (full UI)
+or `HERDR_SESSION=agents herdr agent attach NAME` (one pane). Both SKILL.md
+files state this. The session name is a constant in each script
+(`HERDR_BRIDGE_SESSION` env var overrides it for tests, which use throwaway
+names such as `bridge-test-<pid>`).
 
 ### 3.2 Server availability
 
 Every subcommand runs `ensure_server()` first:
 
-1. `ping` over the socket. On success continue.
-2. Otherwise spawn `herdr server` detached (`start_new_session=True`, stdio to
-   `~/.config/herdr/herdr-server.log`), then poll `ping` up to 10 s.
+1. `ping` over the `agents` socket. On success continue.
+2. Otherwise spawn `HERDR_SESSION=agents herdr server` detached
+   (`start_new_session=True`, stdio to
+   `~/.config/herdr/sessions/agents/herdr-server.log`), then poll `ping` up to
+   10 s. Verified: `herdr server` honors `HERDR_SESSION`, and the named
+   server restores its saved layout and agents on start without any client.
 3. Failure exits 9 (`server_unavailable`) with the log path in the message.
 
-The user intends to run herdr as a service; the auto-start is the fallback
-when it is not up. The bridges never run `herdr server stop`.
+The user intends to run the herdr server as a service; the auto-start is the
+fallback when it is not up. The bridges never run `herdr server stop` or
+`herdr session stop` on their own.
 
 ### 3.3 Topology
 
@@ -146,15 +169,24 @@ files from the old bridge are read once as a migration source for
 `resolve(NAME)` returns one of `live`, `restorable`, `missing`:
 
 1. `herdr agent list` → an agent named `NAME` in the bridge workspace →
-   `live`.
-2. Else an unnamed agent of the right kind whose `agent_session.value` equals
-   the stored `agent_session_id` → herdr restored it after a server restart.
-   `agent rename <pane> NAME` and treat as `live` (adoption).
-3. Else if the stored `pane_id` still exists and hosts an idle shell (`pane
+   `live`. This also covers herdr's own restore: verified 2026-09-01 in an
+   isolated named session that after `session stop` + server restart herdr
+   relaunches the agent **headless (no client attached)** and **keeps the
+   agent name** (`agent_name` is persisted in `session.json`). No adoption or
+   rename step is needed.
+2. Else if the stored `pane_id` still exists and hosts an idle shell (`pane
    get` has no agent, `process-info` foreground is the shell) → `restorable`:
-   `agent start` in that pane with `--resume <agent_session_id>`.
-4. Else `missing`: create the tab, then `agent start` (with `--resume` if an
+   `agent start` in that pane with `--resume <agent_session_id>`. This is the
+   path after the agent process dies (crash, `/exit` without `stop`).
+3. Else `missing`: create the tab, then `agent start` (with `--resume` if an
    id is stored and `--fresh` was not given).
+
+**Session id timing (verified):** herdr's `agent_session` is `null` right
+after `agent start`; the Hermes plugin reports the id on the first LLM call,
+so it appears after the first `send`. `session NAME` therefore returns the
+stored id (possibly empty) until a message has been sent, and `start` alone
+cannot persist a new id. The Claude hook reports on `SessionStart`, so the
+Claude id is available immediately after `open`.
 
 ### 3.6 Launch commands
 
@@ -167,13 +199,34 @@ Startup timeout 60 s (herdr default is 30 s; Hermes loads plugins and memory
 at startup and can exceed that). `agent_not_ready` (blocked during startup) is surfaced as the
 corresponding blocked state, not as failure.
 
-**herdr restore nuance (documented in both SKILL.md):** herdr's own restore
-runs plain `hermes --resume <id>` / `claude --resume <id>`, without
-`--source tool` or the bridge's permission flags. A restored Hermes session
-therefore shows up in `hermes sessions list`, and a restored Claude session
-runs in Claude's default permission mode even if it was opened `--read-only`.
-Adoption re-applies nothing; the SKILL.md tells the agent to `stop`/`close`
-and reopen when the launch flags matter.
+**herdr restore nuance (verified 2026-09-01, documented in both SKILL.md):**
+herdr's own restore runs exactly the command in the session-state table,
+`hermes --resume <id>` / `claude --resume <id>`, and drops every argument the
+bridge passed to `agent start` (`pane process-info` showed argv
+`hermes --resume 20260901_181533_8626d1`). Consequences:
+
+- Hermes: `--cli` is dropped but the user's `display.interface` is `cli`, so
+  the classic REPL still comes up. `--source tool` is dropped too, but the
+  session record keeps its original `tool` source, so the resumed
+  conversation stays hidden from `hermes sessions list` (verified). Net
+  effect for Hermes: none the bridge needs to act on.
+- Claude: `--permission-mode`, `--allowedTools`, and `--model` are dropped.
+  A session opened `--read-only` comes back in Claude's default permission
+  mode after a herdr restart. The bridge records the requested flags in the
+  state file and, on `resolve`, compares them with the live argv from
+  `pane process-info`; on mismatch it logs a warning on stderr and `ask`
+  refuses with exit 1 until the caller runs `close` + `open`. The SKILL.md
+  spells this out.
+
+**Known issue on this host (not a bridge bug):** in the same test, Hermes
+segfaulted right after completing its first turn in a *resumed* session, both
+under herdr's restore and under an explicit `hermes chat --cli --source tool
+--resume <id>`; a fresh session survived the same turn. The crash report
+faults in `_lbug.cpython-311-darwin.so` (`NodeTableScanState::scanNext`),
+i.e. the LadybugDB memory provider. Until that is fixed, resume is
+unreliable here; the bridge handles it as `dead` → `restorable` and the
+SKILL.md tells the agent to prefer `--fresh` when a resumed session dies
+twice in a row.
 
 ### 3.7 State model
 
