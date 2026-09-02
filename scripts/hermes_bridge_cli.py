@@ -151,9 +151,21 @@ def main(argv=None, bridge_factory=None, stdout=None, stderr=None) -> int:
             return 0
         if args.cmd == "start":
             b.cfg = dataclasses.replace(b.cfg, start_timeout_ms=args.timeout * 1000)
-            launch_flags = ["--yolo"] if args.yolo else []
+            stored_flags = b.store.load(name).get("launch_flags") or []
+            was_live = b.find_agent(name) is not None
+            if was_live and args.yolo and "--yolo" not in stored_flags:
+                raise hb.BridgeError(
+                    "session %r is already running without --yolo; run `stop %s` then "
+                    "`start %s --yolo` to relaunch it that way" % (name, name, name), hb.EXIT_ERROR)
             a = b.start(name, build_hermes_launch(args.yolo), fresh=args.fresh)
-            b.store.save(name, launch_flags=launch_flags)
+            if was_live:
+                # Bridge.start() didn't relaunch anything — this invocation's --yolo (or lack
+                # of it) never reached the running process, so the stored record must not
+                # change to reflect what THIS call asked for.
+                if "--yolo" in stored_flags:
+                    err.write("hermes-bridge: this session runs with --yolo (no approval prompts)\n")
+            else:
+                b.store.save(name, launch_flags=(["--yolo"] if args.yolo else []))
             st = b.state(name)[0]
             out.write("%s %s %s\n" % (name, a.get("pane_id"), st))
             return hb.state_exit(st) if st not in ("idle",) else 0

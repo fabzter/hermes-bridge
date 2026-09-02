@@ -69,7 +69,7 @@ class CliTests(unittest.TestCase):
 
     def test_start_does_not_mutate_shared_cfg(self):
         h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
-                       "agent list": [ok("agent_list", agents=[]), ok("agent_list", agents=[agent("bean", pane="w1:p2")])],
+                       "agent list": [ok("agent_list", agents=[]), ok("agent_list", agents=[]), ok("agent_list", agents=[agent("bean", pane="w1:p2")])],
                        "tab create": [ok("tab_created", tab={"tab_id": "w1:t2"}, root_pane={"pane_id": "w1:p2"})],
                        "pane get": [ok("pane_get", pane={"pane_id": "w1:p2", "workspace_id": "w1"})],
                        "pane process-info": [ok("pane_process_info", process_info={"shell_pid": 1, "foreground_processes": [{"name": "zsh", "argv": ["-zsh"]}]})],
@@ -121,7 +121,7 @@ class CliTests(unittest.TestCase):
 
     def test_start_uses_hermes_launch_args(self):
         h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
-                       "agent list": [ok("agent_list", agents=[]), ok("agent_list", agents=[agent("bean", pane="w1:p2")])],
+                       "agent list": [ok("agent_list", agents=[]), ok("agent_list", agents=[]), ok("agent_list", agents=[agent("bean", pane="w1:p2")])],
                        "tab create": [ok("tab_created", tab={"tab_id": "w1:t2"}, root_pane={"pane_id": "w1:p2"})],
                        "pane get": [ok("pane_get", pane={"pane_id": "w1:p2", "workspace_id": "w1"})],
                        "pane process-info": [ok("pane_process_info", process_info={"shell_pid": 1, "foreground_processes": [{"name": "zsh", "argv": ["-zsh"]}]})],
@@ -154,7 +154,7 @@ class CliTests(unittest.TestCase):
 
     _START_FAKE_CALLS = {
         "workspace list": [ok("workspace_list", workspaces=[WS])],
-        "agent list": [ok("agent_list", agents=[]), ok("agent_list", agents=[agent("bean", pane="w1:p2")])],
+        "agent list": [ok("agent_list", agents=[]), ok("agent_list", agents=[]), ok("agent_list", agents=[agent("bean", pane="w1:p2")])],
         "tab create": [ok("tab_created", tab={"tab_id": "w1:t2"}, root_pane={"pane_id": "w1:p2"})],
         "pane get": [ok("pane_get", pane={"pane_id": "w1:p2", "workspace_id": "w1"})],
         "pane process-info": [ok("pane_process_info", process_info={"shell_pid": 1, "foreground_processes": [{"name": "zsh", "argv": ["-zsh"]}]})],
@@ -275,6 +275,31 @@ class CliTests(unittest.TestCase):
         start = [c for c in h.calls if c[:3] == ("cli", "agent", "start")][0]
         self.assertEqual(start[start.index("--") + 1:], ("chat", "--cli", "--source", "tool"))
         self.assertEqual(store.load("bean").get("launch_flags"), [])
+
+    def test_start_on_live_yolo_session_keeps_stored_flags_and_warns(self):
+        # `start` on an already-live session doesn't relaunch anything (Bridge.start returns the
+        # running agent as-is) -- a plain `start` here must not erase the session's --yolo record.
+        store = hb.StateStore(tempfile.mkdtemp())
+        store.save("bean", launch_flags=["--yolo"])
+        h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
+                       "agent list": [ok("agent_list", agents=[agent("bean")])]})
+        rc, out, err = run(["start", "bean"], h, store)
+        self.assertEqual(rc, 0)
+        self.assertEqual(store.load("bean").get("launch_flags"), ["--yolo"])
+        self.assertIn("hermes-bridge: this session runs with --yolo (no approval prompts)", err)
+        self.assertEqual([c for c in h.calls if c[:3] == ("cli", "agent", "start")], [])
+
+    def test_start_yolo_on_live_plain_session_is_refused(self):
+        # The reverse: `start --yolo` on a session already running WITHOUT --yolo must not
+        # relaunch it (that would silently record a --yolo flag the running process never got).
+        store = hb.StateStore(tempfile.mkdtemp())
+        h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
+                       "agent list": [ok("agent_list", agents=[agent("bean")])]})
+        rc, _, err = run(["start", "bean", "--yolo"], h, store)
+        self.assertEqual(rc, 1)
+        self.assertIn("already running without --yolo", err)
+        self.assertEqual([c for c in h.calls if c[:3] == ("cli", "agent", "start")], [])
+        self.assertEqual(store.load("bean").get("launch_flags"), None)
 
     def test_send_on_yolo_session_writes_stderr_note(self):
         after = "● hi\n╭─ ⚕ Hermes  10:00─╮\nhello back\n╰──╯\n❯\n"
