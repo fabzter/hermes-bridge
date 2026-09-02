@@ -368,6 +368,41 @@ class CliTests(unittest.TestCase):
         self.assertEqual((rc, out.strip()), (0, "idle"))
         self.assertEqual(len([c for c in h.calls if c[:3] == ("cli", "agent", "wait")]), 1)
 
+    def test_wait_argv_includes_until_values_and_timeout(self):
+        h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
+                       "agent list": [ok("agent_list", agents=[agent("bean", status="idle")])],
+                       "agent wait": [ok("agent_wait")]})
+        rc, out, _ = run(["wait", "bean", "--timeout", "5"], h)
+        self.assertEqual((rc, out.strip()), (0, "idle"))
+        wait_call = [c for c in h.calls if c[:3] == ("cli", "agent", "wait")][0]
+        self.assertEqual(wait_call[3:], ("bean", "--until", "idle", "--until", "done",
+                                          "--until", "blocked", "--timeout", "5000"))
+
+    def test_wait_blocked_outcome_exits_3(self):
+        h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
+                       "agent list": [ok("agent_list", agents=[agent("bean", status="blocked")])],
+                       "agent explain": [{"matched_rule": {"id": "unmapped_rule"}}],
+                       "agent wait": [ok("agent_wait")]})
+        rc, out, _ = run(["wait", "bean", "--timeout", "5"], h)
+        self.assertEqual((rc, out.strip()), (3, "blocked"))
+
+    def test_wait_timeout_option_has_help_text(self):
+        parser = cli.build_parser()
+        wait_sub = parser._subparsers._group_actions[0].choices["wait"]
+        self.assertTrue(wait_sub.format_help().strip())
+        timeout_action = [a for a in wait_sub._actions if "--timeout" in a.option_strings][0]
+        self.assertTrue(timeout_action.help)
+
+    # -- item 7: --session + NAME refusal, parametrized over every named command -----------
+
+    def test_legacy_session_alias_collision_refused_for_every_named_command(self):
+        for cmd in sorted(cli._NAMED_CMDS):
+            extra = ["bean2", "bean3"] if cmd in cli._LEGACY_POSITIONAL else ["bean2"]
+            with self.subTest(cmd=cmd):
+                rc, _, err = run([cmd, "--session", "bean"] + extra, FakeHerdr())
+                self.assertEqual(rc, 2)
+                self.assertIn("cannot both be given", err)
+
     def test_wait_falls_back_to_polling_when_herdr_wait_socket_closes(self):
         h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
                        "agent list": [ok("agent_list", agents=[agent("bean", status="idle")])],
@@ -386,6 +421,92 @@ class CliTests(unittest.TestCase):
         self.assertEqual(len(wait_idx), 1)
         self.assertGreaterEqual(len(list_idx), 1)
         self.assertGreater(list_idx[0], wait_idx[0])
+
+    # -- fix round 2, item 2: restorable (dead-pane) `start` relaunches with the STORED ------
+    # -- launch_flags unless the caller passes --yolo explicitly; result is re-recorded ------
+
+    _RESTORABLE_FAKE_CALLS = {
+        "workspace list": [ok("workspace_list", workspaces=[WS])],
+        "agent list": [ok("agent_list", agents=[]), ok("agent_list", agents=[]),
+                       ok("agent_list", agents=[agent("bean", pane="w1:p1", session="S1")])],
+        "pane get": [ok("pane_get", pane={"pane_id": "w1:p1", "workspace_id": "w1"})],
+        "pane process-info": [ok("pane_process_info", process_info={
+            "shell_pid": 1, "foreground_processes": [{"name": "zsh", "argv": ["-zsh"]}]})],
+        "agent start": [ok("agent_started", agent=agent("bean", pane="w1:p1", session="S1"))],
+    }
+
+    def test_start_restorable_session_relaunches_with_stored_yolo_flag(self):
+        store = hb.StateStore(tempfile.mkdtemp())
+        store.save("bean", pane_id="w1:p1", tab_id="w1:t1", agent_session_id="S1",
+                   launch_flags=["--yolo"])
+        h = FakeHerdr(dict(self._RESTORABLE_FAKE_CALLS))
+        rc, _, err = run(["start", "bean"], h, store)
+        self.assertEqual(rc, 0)
+        start = [c for c in h.calls if c[:3] == ("cli", "agent", "start")][0]
+        self.assertEqual(start[start.index("--") + 1:],
+                         ("chat", "--cli", "--source", "tool", "--yolo", "--resume", "S1"))
+        self.assertEqual(store.load("bean").get("launch_flags"), ["--yolo"])
+        self.assertIn("hermes-bridge: this session runs with --yolo (no approval prompts)", err)
+
+    def test_start_restorable_session_without_stored_flags_plus_explicit_yolo(self):
+        store = hb.StateStore(tempfile.mkdtemp())
+        store.save("bean", pane_id="w1:p1", tab_id="w1:t1", agent_session_id="S1")
+        h = FakeHerdr(dict(self._RESTORABLE_FAKE_CALLS))
+        rc, _, err = run(["start", "bean", "--yolo"], h, store)
+        self.assertEqual(rc, 0)
+        start = [c for c in h.calls if c[:3] == ("cli", "agent", "start")][0]
+        self.assertEqual(start[start.index("--") + 1:],
+                         ("chat", "--cli", "--source", "tool", "--yolo", "--resume", "S1"))
+        self.assertEqual(store.load("bean").get("launch_flags"), ["--yolo"])
+        self.assertIn("hermes-bridge: this session runs with --yolo (no approval prompts)", err)
+
+    # -- fix round 2, item 5: `start NAME --yolo` on a brand-new pane also prints the note ---
+
+    def test_start_fresh_pane_with_explicit_yolo_prints_note(self):
+        store = hb.StateStore(tempfile.mkdtemp())
+        h = FakeHerdr(dict(self._START_FAKE_CALLS))
+        rc, _, err = run(["start", "bean", "--yolo"], h, store)
+        self.assertEqual(rc, 0)
+        self.assertIn("hermes-bridge: this session runs with --yolo (no approval prompts)", err)
+
+    def test_start_fresh_pane_without_yolo_prints_no_note(self):
+        store = hb.StateStore(tempfile.mkdtemp())
+        h = FakeHerdr(dict(self._START_FAKE_CALLS))
+        rc, _, err = run(["start", "bean"], h, store)
+        self.assertEqual(rc, 0)
+        self.assertNotIn("--yolo", err)
+
+    # -- fix round 2, item 4: `start NAME --fresh` on a LIVE session is refused, not a no-op -
+
+    def test_start_fresh_on_live_session_is_refused(self):
+        h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
+                       "agent list": [ok("agent_list", agents=[agent("bean")])]})
+        rc, _, err = run(["start", "bean", "--fresh"], h)
+        self.assertEqual(rc, 1)
+        self.assertIn("bean is running; stop bean first, then start bean --fresh", err)
+        self.assertEqual([c for c in h.calls if c[:3] == ("cli", "agent", "start")], [])
+
+    # -- fix round 2, item 6: `forget NAME` on a LIVE session is refused, state untouched ----
+
+    def test_forget_on_live_session_is_refused(self):
+        store = hb.StateStore(tempfile.mkdtemp())
+        store.save("bean", launch_flags=["--yolo"])
+        h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
+                       "agent list": [ok("agent_list", agents=[agent("bean")])]})
+        rc, _, err = run(["forget", "bean"], h, store)
+        self.assertEqual(rc, 1)
+        self.assertIn("bean is running; stop bean first", err)
+        self.assertEqual(store.load("bean").get("launch_flags"), ["--yolo"])
+
+    def test_forget_on_dead_session_still_works(self):
+        store = hb.StateStore(tempfile.mkdtemp())
+        store.save("bean", launch_flags=["--yolo"])
+        h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
+                       "agent list": [ok("agent_list", agents=[])]})
+        rc, out, _ = run(["forget", "bean"], h, store)
+        self.assertEqual(rc, 0)
+        self.assertIn("forgotten", out)
+        self.assertEqual(store.load("bean"), {})
 
 
 if __name__ == "__main__":

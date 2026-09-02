@@ -52,7 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--timeout", type=int, default=600, help="seconds to wait for the reply")
     named("state", "print idle|busy|approval|secret|clarify|blocked|unknown|dead|missing")
     sp = named("wait", "block until Hermes settles, then print the state")
-    sp.add_argument("--timeout", type=int, default=600)
+    sp.add_argument("--timeout", type=int, default=600, help="seconds to wait for Hermes to settle")
     sp = named("peek", "print recent pane text")
     sp.add_argument("-n", "--lines", type=int, default=80)
     named("approve", "select 'Allow once' in an approval menu (only after the human said yes)")
@@ -156,11 +156,20 @@ def main(argv=None, bridge_factory=None, stdout=None, stderr=None) -> int:
             b.cfg = dataclasses.replace(b.cfg, start_timeout_ms=args.timeout * 1000)
             stored_flags = b.store.load(name).get("launch_flags") or []
             was_live = b.find_agent(name) is not None
+            if was_live and args.fresh:
+                raise hb.BridgeError(
+                    "%s is running; stop %s first, then start %s --fresh" % (name, name, name),
+                    hb.EXIT_ERROR)
             if was_live and args.yolo and "--yolo" not in stored_flags:
                 raise hb.BridgeError(
                     "session %r is already running without --yolo; run `stop %s` then "
                     "`start %s --yolo` to relaunch it that way" % (name, name, name), hb.EXIT_ERROR)
-            a = b.start(name, build_hermes_launch(args.yolo), fresh=args.fresh)
+            # For a non-live target (brand-new pane, or a dead/restorable pane whose stored
+            # session id we're about to --resume), an explicit --yolo always wins; otherwise
+            # carry forward whatever --yolo-ness was already on record so a crash-recovery
+            # `start NAME` (no flags typed) doesn't silently downgrade a yolo session.
+            effective_yolo = args.yolo or ("--yolo" in stored_flags)
+            a = b.start(name, build_hermes_launch(effective_yolo), fresh=args.fresh)
             if was_live:
                 # Bridge.start() didn't relaunch anything — this invocation's --yolo (or lack
                 # of it) never reached the running process, so the stored record must not
@@ -168,7 +177,9 @@ def main(argv=None, bridge_factory=None, stdout=None, stderr=None) -> int:
                 if "--yolo" in stored_flags:
                     err.write("hermes-bridge: this session runs with --yolo (no approval prompts)\n")
             else:
-                b.store.save(name, launch_flags=(["--yolo"] if args.yolo else []))
+                b.store.save(name, launch_flags=(["--yolo"] if effective_yolo else []))
+                if effective_yolo:
+                    err.write("hermes-bridge: this session runs with --yolo (no approval prompts)\n")
             st = b.state(name)[0]
             out.write("%s %s %s\n" % (name, a.get("pane_id"), st))
             return hb.state_exit(st) if st not in ("idle",) else 0
@@ -221,6 +232,8 @@ def main(argv=None, bridge_factory=None, stdout=None, stderr=None) -> int:
             out.write("stopped\n" if b.stop(name) else "nothing to stop\n")
             return 0
         if args.cmd == "forget":
+            if b.find_agent(name) is not None:
+                raise hb.BridgeError("%s is running; stop %s first" % (name, name), hb.EXIT_ERROR)
             out.write("forgotten\n" if b.store.delete(name) else "nothing stored\n")
             return 0
         raise hb.UsageError("unknown command %r" % args.cmd)

@@ -32,14 +32,16 @@ scripts/hermes-bridge state cv                     # idle|busy|approval|secret|c
 scripts/hermes-bridge approve cv                   # act on a dangerous-command menu (human-gated)
 scripts/hermes-bridge deny cv "not needed"
 scripts/hermes-bridge stop cv                      # /exit + close the tab (conversation stays resumable)
-scripts/hermes-bridge list                         # every bridge session: name, pane, state, session id
+scripts/hermes-bridge list                         # every bridge session: name, pane, state, session id, launch flags (--yolo or -)
 ```
 
-NAME is a herdr agent name (`^[a-z][a-z0-9_-]{0,31}$`) — pick one stable name per purpose and reuse it for every call in that conversation/task. `log` is the one subcommand that takes no NAME (it tails a single shared log file). Distinct exit codes per state (3 approval, 4 secret, 5 clarify, 6 timeout, 7 dead, 8 busy, 9 server unreachable…) make it scriptable; `state` always exits 0 regardless of what it prints. See `SKILL.md` for the full contract, including the states table and known host issues.
+NAME is a herdr agent name (`^[a-z][a-z0-9_-]{0,31}$`) — pick one stable name per purpose and reuse it for every call in that conversation/task. `log` is the one subcommand that takes no NAME (it tails a single shared log file). Distinct exit codes per state (3 approval, 4 secret, 5 clarify, 6 timeout, 7 dead, 8 busy, 9 server unreachable…) make it scriptable; `state` exits 0 for whatever state it prints — except 2 on an invalid NAME, 1 if NAME matches multiple live agents, and 9 if the herdr server can't be reached. See `SKILL.md` for the full contract, including the states table and known host issues.
 
 **Argument order**: options go *after* the positionals, not between them — `send cv --timeout 900 "hi"` fails, `send cv "hi" --timeout 900` works. `--session NAME` is a deprecated alias for the NAME positional and cannot be combined with one.
 
 **`--yolo` policy**: `start` accepts `--yolo` to launch Hermes with no approval prompts. It is never passed on the bridge's own initiative — only when the user explicitly asked for a yolo/autonomous Hermes session for this conversation. Yolo sessions never produce `approval` states, so `approve`/`deny` do not apply to them.
+
+**`--fresh` and `forget`**: both are refused (exit 1) while NAME is currently running — `stop NAME` first, then `start NAME --fresh` or `forget NAME`. `forget` deletes the stored pane, tab, session id and launch flags for NAME; the next `start` begins a brand-new conversation.
 
 ## How herdr is used
 

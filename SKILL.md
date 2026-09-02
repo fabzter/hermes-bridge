@@ -15,9 +15,9 @@ Requires herdr ≥ 0.8.2 and python3. The bridge starts the `agents` herdr serve
 
 | Subcommand | Purpose |
 |---|---|
-| `start [NAME] [--fresh] [--timeout N] [--yolo]` | Launch or resume Hermes in a pane of herdr session `agents` (default timeout 120s; first start on a brand-new pane can take up to ~2 min while the bridge waits for the shell to settle) |
+| `start [NAME] [--fresh] [--timeout N] [--yolo]` | Launch or resume Hermes in a pane of herdr session `agents` (default timeout 120s; first start on a brand-new pane can take up to ~2 min while the bridge waits for the shell to settle); `--fresh` on a session that's currently running is refused — `stop NAME` first |
 | `send [NAME] TEXT` | Send one message (multiline safe) and print Hermes's reply (default timeout 600s) |
-| `state [NAME]` | Print `idle\|busy\|approval\|secret\|clarify\|blocked\|unknown\|dead\|missing`; always exits 0 except 9 if the herdr server can't be reached |
+| `state [NAME]` | Print `idle\|busy\|approval\|secret\|clarify\|blocked\|unknown\|dead\|missing`; exits 0 for whatever it prints, except 2 on a bad NAME, 1 if NAME is ambiguous (multiple live agents), 9 if the herdr server can't be reached |
 | `wait [NAME] [--timeout N]` | Block until Hermes settles, then print the state; falls back to polling if the herdr socket drops |
 | `peek [NAME] [-n LINES]` | Print recent pane text, no state change (default 80 lines) |
 | `approve [NAME]` | Select "Allow once" in an approval menu — only after the human has said yes |
@@ -25,8 +25,8 @@ Requires herdr ≥ 0.8.2 and python3. The bridge starts the `agents` herdr serve
 | `answer [NAME] TEXT` | Answer a clarification prompt; waits up to 5 s for the prompt to clear |
 | `session [NAME]` | Print the Hermes session id (exit 1 with a message until the first turn completes — send one message first) |
 | `stop [NAME]` | Send `/exit` and close the tab; conversation stays resumable; exits 0 even with nothing to stop |
-| `forget [NAME]` | Delete the stored record for NAME (pane, tab and session id; next `start` begins a brand-new conversation) |
-| `list` | List bridge sessions: name, pane, state, session id |
+| `forget [NAME]` | Delete the stored record for NAME (pane, tab, session id and launch flags; next `start` begins a brand-new conversation); refused with exit 1 while NAME is running — `stop NAME` first |
+| `list` | List bridge sessions: name, pane, state, session id, launch flags (`--yolo` or `-`) |
 | `gc` | Close tabs whose Hermes process has already exited |
 | `log [-n N]` | Tail `~/.hermes/logs/agent.log` (default 40 lines; no NAME — one shared log) |
 
@@ -42,11 +42,11 @@ NAME is the herdr agent name: `^[a-z][a-z0-9_-]{0,31}$` (lowercase start, then l
 
 ## Exit Codes
 
-`0` ok, `1` generic error, `2` missing (no tab/agent found for NAME), `3` approval (also the exit for the generic `blocked` state), `4` secret, `5` clarify, `6` timeout, `7` dead (also the exit for `unknown`), `8` busy — refused rather than silently interrupting in-flight work; not `send`-only, `start`/`wait`/`answer` can exit `8` too, `9` server (herdr server unreachable). Exceptions: `state` always exits `0` except `9` when the herdr server can't be reached — read its printed word, not the exit code otherwise; `stop` on an already-missing session also exits `0`.
+`0` ok, `1` generic error, `2` missing (no tab/agent found for NAME), `3` approval (also the exit for the generic `blocked` state), `4` secret, `5` clarify, `6` timeout, `7` dead (also the exit for `unknown`), `8` busy — refused rather than silently interrupting in-flight work; not `send`-only, `start`/`wait`/`answer` can exit `8` too, `9` server (herdr server unreachable). Exceptions: `state` exits `0` for whatever state it prints — read the printed word, not the exit code — except `2` on an invalid NAME, `1` if NAME matches multiple live agents (ambiguous), and `9` when the herdr server can't be reached; `stop` on an already-missing session also exits `0`.
 
 ## Workflow
 
-1. `start NAME` (add `--fresh` only if the user wants a brand-new conversation, not a resume).
+1. `start NAME` (add `--fresh` only if the user wants a brand-new conversation, not a resume; refused with exit 1 if NAME is currently running — `stop NAME` first).
 2. Always check `state NAME` before `send NAME ...` — don't send into approval/secret/clarify. herdr's own `agent prompt` also refuses to type into a blocked agent, so `send` never interrupts an in-flight approval.
 3. Loop: `send NAME MESSAGE` (or `send NAME -f FILE` for multiline) → act on the resulting state → repeat.
 4. `stop NAME` at the end of the conversation, unless the user wants the session left running.
@@ -59,7 +59,7 @@ NAME is the herdr agent name: `^[a-z][a-z0-9_-]{0,31}$` (lowercase start, then l
 | `busy` | Agent/tool running | `wait` |
 | `approval` | Dangerous-command menu open | **surface to the human in chat; only run `approve` after they say yes.** Never approve on your own initiative. |
 | `secret` | Credential/secret prompt open | **surface to the human; never type the secret into the pane yourself** |
-| `clarify` | Hermes asked a clarifying question | answer directly via `send`/`answer` if you already know the answer from context |
+| `clarify` | Hermes asked a clarifying question | answer with `answer NAME TEXT` if you already know the answer from context — `send` refuses in this state |
 | `blocked` | A menu/prompt is open but herdr's rule set didn't classify it as approval/secret/clarify | `peek`, then surface the dialog to the human |
 | `unknown` | herdr couldn't classify the agent's status at all | don't retry blindly — `peek`/`log`, then treat like `dead` |
 | `dead` | Tab/pane present, Hermes process gone (crash) | don't retry sends; `dead` after a turn (Ladybug crash) → `start NAME` resumes the same conversation; `--fresh` only when the user wants a new one |
@@ -94,7 +94,7 @@ This authority covers lifecycle only. It does NOT extend to approving Hermes's d
 
 **Ask Hermes directly:** `start NAME` → `send NAME "..."` → check the printed state → `peek NAME` if you need more than the extracted reply. Simplest when the answer requires Hermes's own reasoning, not just its memory files.
 
-**Teach Hermes something:** `send NAME -f FILE` a message asking it to remember, or drive `/learn` in-session to capture a reusable skill. Memory writes may be approval-gated — handle per the approval row above. Memory is a **frozen snapshot taken at session start**: a fact taught mid-session won't be reflected in that same session's behavior. To verify it landed, `stop` and `start` a fresh session (or `start NAME --fresh` for a wholly new conversation) and probe again.
+**Teach Hermes something:** `send NAME -f FILE` a message asking it to remember, or drive `/learn` in-session to capture a reusable skill. Memory writes may be approval-gated — handle per the approval row above. Memory is a **frozen snapshot taken at session start**: a fact taught mid-session won't be reflected in that same session's behavior. To verify it landed, `stop NAME` then `start NAME --fresh` for a wholly new conversation and probe again — `--fresh` on a still-running session is refused (`stop` it first).
 
 ## Safety
 
