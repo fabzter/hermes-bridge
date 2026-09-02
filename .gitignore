@@ -1,3 +1,5 @@
 state/
 *.session-id
 .superpowers/
+__pycache__/
+*.pyc
