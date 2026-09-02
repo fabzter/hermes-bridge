@@ -18,11 +18,11 @@ Requires herdr ≥ 0.8.2 and python3. The bridge starts the `agents` herdr serve
 | `start [NAME] [--fresh] [--timeout N] [--yolo]` | Launch or resume Hermes in a pane of herdr session `agents` (default timeout 120s; first start on a brand-new pane can take up to ~2 min while the bridge waits for the shell to settle) |
 | `send [NAME] TEXT` | Send one message (multiline safe) and print Hermes's reply (default timeout 600s) |
 | `state [NAME]` | Print `idle\|busy\|approval\|secret\|clarify\|blocked\|unknown\|dead\|missing`; always exits 0 except 9 if the herdr server can't be reached |
-| `wait [NAME] [--timeout N]` | Block until Hermes settles, then print the state |
+| `wait [NAME] [--timeout N]` | Block until Hermes settles, then print the state; falls back to polling if the herdr socket drops |
 | `peek [NAME] [-n LINES]` | Print recent pane text, no state change (default 80 lines) |
 | `approve [NAME]` | Select "Allow once" in an approval menu — only after the human has said yes |
 | `deny [NAME] [REASON]` | Select "Deny"; REASON is logged to stderr only |
-| `answer [NAME] TEXT` | Answer a clarification prompt |
+| `answer [NAME] TEXT` | Answer a clarification prompt; waits up to 5 s for the prompt to clear |
 | `session [NAME]` | Print the Hermes session id (exit 1 with a message until the first turn completes — send one message first) |
 | `stop [NAME]` | Send `/exit` and close the tab; conversation stays resumable; exits 0 even with nothing to stop |
 | `forget [NAME]` | Delete the stored record for NAME (pane, tab and session id; next `start` begins a brand-new conversation) |

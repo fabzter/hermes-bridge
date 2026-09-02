@@ -358,6 +358,35 @@ class CliTests(unittest.TestCase):
         self.assertTrue(line.rstrip().endswith("-"))
         self.assertNotIn("--yolo", line)
 
+    # -- task 3: `wait` uses wait_status (herdr `agent wait` first, polling fallback) ------
+
+    def test_wait_happy_path_calls_agent_wait_and_prints_state(self):
+        h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
+                       "agent list": [ok("agent_list", agents=[agent("bean", status="idle")])],
+                       "agent wait": [ok("agent_wait")]})
+        rc, out, _ = run(["wait", "bean", "--timeout", "5"], h)
+        self.assertEqual((rc, out.strip()), (0, "idle"))
+        self.assertEqual(len([c for c in h.calls if c[:3] == ("cli", "agent", "wait")]), 1)
+
+    def test_wait_falls_back_to_polling_when_herdr_wait_socket_closes(self):
+        h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
+                       "agent list": [ok("agent_list", agents=[agent("bean", status="idle")])],
+                       "agent wait": [hb.HerdrError("closed", "socket closed")]})
+        orig_sleep, orig_now = hb._sleep, hb._now
+        clock = [0.0]
+        hb._sleep = lambda s: clock.__setitem__(0, clock[0] + s)
+        hb._now = lambda: clock[0]
+        try:
+            rc, out, _ = run(["wait", "bean", "--timeout", "5"], h)
+        finally:
+            hb._sleep, hb._now = orig_sleep, orig_now
+        self.assertEqual((rc, out.strip()), (0, "idle"))
+        wait_idx = [i for i, c in enumerate(h.calls) if c[:3] == ("cli", "agent", "wait")]
+        list_idx = [i for i, c in enumerate(h.calls) if c[:3] == ("cli", "agent", "list")]
+        self.assertEqual(len(wait_idx), 1)
+        self.assertGreaterEqual(len(list_idx), 1)
+        self.assertGreater(list_idx[0], wait_idx[0])
+
 
 if __name__ == "__main__":
     unittest.main()

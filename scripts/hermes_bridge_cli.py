@@ -189,7 +189,7 @@ def main(argv=None, bridge_factory=None, stdout=None, stderr=None) -> int:
             out.write(b.state(name)[0] + "\n")
             return 0
         if args.cmd == "wait":
-            st = b.wait(name, args.timeout * 1000)[0]
+            st = b.wait_status(name, timeout_ms=args.timeout * 1000)[0]
             out.write(st + "\n")
             return hb.state_exit(st)
         if args.cmd == "peek":
