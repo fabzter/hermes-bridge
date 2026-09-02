@@ -15,7 +15,7 @@ Requires herdr ≥ 0.8.2 and python3. The bridge starts the `agents` herdr serve
 
 | Subcommand | Purpose |
 |---|---|
-| `start [NAME] [--fresh] [--timeout N]` | Launch or resume Hermes in a pane of herdr session `agents` (default timeout 60s) |
+| `start [NAME] [--fresh] [--timeout N]` | Launch or resume Hermes in a pane of herdr session `agents` (default timeout 120s; first start on a brand-new pane can take up to ~2 min while the bridge waits for the shell to settle) |
 | `send [NAME] TEXT` | Send one message (multiline safe) and print Hermes's reply (default timeout 600s) |
 | `state [NAME]` | Print `idle\|busy\|approval\|secret\|clarify\|blocked\|unknown\|dead\|missing`; always exits 0 |
 | `wait [NAME] [--timeout N]` | Block until Hermes settles, then print the state |
@@ -82,7 +82,7 @@ This authority covers lifecycle only. It does NOT extend to approving Hermes's d
 - **Session id timing**: the Hermes session id only exists after Hermes's first LLM call, so `session NAME` right after `start` may report none known yet — send one message first.
 - **Server restarts don't duplicate agents**: after a herdr server restart, herdr relaunches `hermes --resume <id>` on its own and keeps the same name; `start NAME` finds it rather than creating a second one.
 - **Known host issue — Hermes segfaults after a turn**: a native crash in the LadybugDB memory provider (`_lbug`) has been observed right after Hermes completes a turn, both in resumed sessions and on the second turn of otherwise-fresh sessions. The bridge reports `dead`. Remedy: `start NAME` again (the conversation resumes from the saved session id). If it keeps dying, tell the user this is a Hermes/Ladybug problem, not something to work around — never pass `--yolo`, never modify Hermes's own config.
-- **Fresh-start race**: starting a brand-new session can occasionally hit a herdr `agent_pane_busy`/startup-timeout race (the tab exists before its pane is recognized as ready, or Hermes's welcome-screen LLM call hasn't finished). A second `start NAME` on the same name reliably succeeds. An upstream herdr fix is in progress — for now, just retry once.
+- **Fresh-start race**: a brand-new pane's shell can still be mid-startup (e.g. `pyenv rehash` contention) when herdr would otherwise report `agent_pane_busy`. The bridge now waits for the shell to settle (up to `shell_settle_s`, default 70s) and retries `agent_pane_busy` itself before giving up — no manual retry needed. First `start` on a brand-new pane can take up to ~2 minutes as a result; a `start NAME` on an existing/resumed pane is fast as before.
 - **Approval menu unreadable**: `approve`/`deny` refuse with "approval menu not recognized" when herdr's screen parser can't read the current menu render. When that happens, `peek` the dialog and surface it to the human — never press keys manually to approve or deny on their behalf.
 - **Human visibility**: the human can watch live with `herdr session attach agents` or `HERDR_SESSION=agents herdr agent attach NAME`.
 

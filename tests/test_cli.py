@@ -71,10 +71,12 @@ class CliTests(unittest.TestCase):
         h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
                        "agent list": [ok("agent_list", agents=[]), ok("agent_list", agents=[agent("bean", pane="w1:p2")])],
                        "tab create": [ok("tab_created", tab={"tab_id": "w1:t2"}, root_pane={"pane_id": "w1:p2"})],
+                       "pane get": [ok("pane_get", pane={"pane_id": "w1:p2", "workspace_id": "w1"})],
+                       "pane process-info": [ok("pane_process_info", process_info={"shell_pid": 1, "foreground_processes": [{"name": "zsh", "argv": ["-zsh"]}]})],
                        "agent start": [ok("agent_started", agent=agent("bean", pane="w1:p2"))]})
         rc, _, _ = run(["start", "bean", "--timeout", "5"], h)
         self.assertEqual(rc, 0)
-        self.assertEqual(cli.HERMES_CFG.start_timeout_ms, 60000)
+        self.assertEqual(cli.HERMES_CFG.start_timeout_ms, 120000)
 
     def test_send_file_not_found_is_usage_error(self):
         h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
@@ -121,6 +123,8 @@ class CliTests(unittest.TestCase):
         h = FakeHerdr({"workspace list": [ok("workspace_list", workspaces=[WS])],
                        "agent list": [ok("agent_list", agents=[]), ok("agent_list", agents=[agent("bean", pane="w1:p2")])],
                        "tab create": [ok("tab_created", tab={"tab_id": "w1:t2"}, root_pane={"pane_id": "w1:p2"})],
+                       "pane get": [ok("pane_get", pane={"pane_id": "w1:p2", "workspace_id": "w1"})],
+                       "pane process-info": [ok("pane_process_info", process_info={"shell_pid": 1, "foreground_processes": [{"name": "zsh", "argv": ["-zsh"]}]})],
                        "agent start": [ok("agent_started", agent=agent("bean", pane="w1:p2"))]})
         rc, out, _ = run(["start", "bean"], h)
         self.assertEqual(rc, 0)
